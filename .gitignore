@@ -25,3 +25,5 @@ Thumbs.db
 
 *.log
 logs/
+
+util_files/
