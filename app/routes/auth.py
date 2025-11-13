@@ -43,8 +43,18 @@ def register(data: RegisterIn, db: Session = Depends(get_db)):
         raise HTTPException(status_code=409, detail="Username already exists")
 
     try:
-        salt = bytes.fromhex(data.salt.strip())
-        verifier = bytes.fromhex(data.verifier.strip())
+        salt_hex = data.salt.strip().lower()
+        verifier_hex = data.verifier.strip().lower()
+
+        if len(salt_hex) % 2 != 0:
+            salt_hex = "0" + salt_hex
+
+        if len(verifier_hex) % 2 != 0:
+            verifier_hex = "0" + verifier_hex
+
+        salt = bytes.fromhex(salt_hex)
+        verifier = bytes.fromhex(verifier_hex)
+
     except ValueError:
         raise HTTPException(status_code=400, detail="salt/verifier must be hex")
 
@@ -62,7 +72,7 @@ def login_start(body: LoginStartIn, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="User not found")
 
     verifier_hex = user.srp_verifier.hex()
-    ctx = SRPContext(username, None, prime=PRIME, generator=GENERATOR)
+    ctx = SRPContext(username, "", prime=PRIME, generator=GENERATOR)
     server_session = SRPServerSession(ctx, verifier_hex)
     active_sessions[username] = server_session
 
