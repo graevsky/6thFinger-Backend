@@ -12,7 +12,6 @@ from app.models.user import User
 from app.models.token import Token
 from app.deps import get_current_user
 
-
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 # session storage
@@ -40,7 +39,10 @@ def get_srp_params():
 def register(data: RegisterIn, db: Session = Depends(get_db)):
     username = data.username.lower().strip()
     if db.query(User).filter_by(username=username).first():
-        raise HTTPException(status_code=409, detail="Username already exists")
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "USERNAME_TAKEN", "detail": "Username already exists"},
+        )
 
     try:
         salt_hex = data.salt.strip().lower()
@@ -69,7 +71,10 @@ def login_start(body: LoginStartIn, db: Session = Depends(get_db)):
     username = body.username.lower().strip()
     user = db.query(User).filter_by(username=username).first()
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "USER_NOT_FOUND", "detail": "User not found"},
+        )
 
     verifier_hex = user.srp_verifier.hex()
     ctx = SRPContext(username, "", prime=PRIME, generator=GENERATOR)
@@ -97,11 +102,20 @@ def login_finish(body: LoginFinishIn, db: Session = Depends(get_db)):
         if not session.verify_proof(client_M1):
             raise ValueError("Proof mismatch")
     except Exception:
-        raise HTTPException(status_code=401, detail="Authentication failed")
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "WRONG_PASSWORD",
+                "detail": "Invalid username or password",
+            },
+        )
 
     user = db.query(User).filter_by(username=username).first()
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "USER_NOT_FOUND", "detail": "User not found"},
+        )
 
     access_token = tokens.create_access_token({"sub": str(user.id)})
     refresh_token, refresh_hash, expire = tokens.create_refresh_token(
