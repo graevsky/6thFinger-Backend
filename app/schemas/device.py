@@ -9,6 +9,10 @@ class DeviceCreate(BaseModel):
     alias: Optional[str] = None
 
 
+class DeviceUpdate(BaseModel):
+    alias: Optional[str] = None
+
+
 class DeviceOut(BaseModel):
     id: UUID
     owner_id: UUID
@@ -23,7 +27,7 @@ class DeviceOut(BaseModel):
 class DeviceSettingsOut(BaseModel):
     id: UUID
     device_id: UUID
-    version: str
+    version: int
     payload: dict
     updated_at: datetime
 
@@ -32,5 +36,4 @@ class DeviceSettingsOut(BaseModel):
 
 
 class DeviceSettingsIn(BaseModel):
-    version: str = Field(..., description="timestamp")
-    payload: dict
+    payload: dict = Field(..., description="device settings json")
