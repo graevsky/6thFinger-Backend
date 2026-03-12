@@ -19,6 +19,7 @@ class User(Base):
     srp_salt = Column(LargeBinary, nullable=False)
     srp_verifier = Column(LargeBinary, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
+    avatar_key = Column(String(265), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
