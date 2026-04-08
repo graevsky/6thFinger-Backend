@@ -1,0 +1,2 @@
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+New-NetFirewallRule -DisplayName "AllowUvicornOn8000" -Direction Inbound -Protocol TCP -LocalPort 8000 -Action Allow
