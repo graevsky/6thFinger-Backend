@@ -27,3 +27,5 @@ Thumbs.db
 logs/
 
 util_files/
+
+minio-data/
