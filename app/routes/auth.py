@@ -7,19 +7,18 @@ from sqlalchemy.orm import Session
 from srptools import SRPContext, SRPServerSession
 from srptools.constants import PRIME_2048, PRIME_2048_GEN
 
-from app import db
 from app.email_sender import SmtpEmailSender, EmailNotConfigured
 from app.models.email_code import EmailCode
 from app.models.recovery_code import RecoveryCode
+from app.models.password_reset_session import PasswordResetSession
+from app.models.user import User
+from app.models.token import Token
+from app.models.app_settings import AppSettings
 from app.schemas.auth import *
 from app.security import srp as srp_utils, tokens
 from app.db import SessionLocal
-from app.models.user import User
-from app.models.token import Token
-from app.models.password_reset_session import PasswordResetSession
 from app.deps import get_current_user
 from app.security.hashing import hash_recovery_code, hash_email_code
-from app.models.app_settings import AppSettings
 from app.locale.i18n_email import build_email, normalize_lang
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -39,6 +38,13 @@ def _now_utc() -> datetime.datetime:
     return datetime.datetime.now(datetime.timezone.utc)
 
 
+def _err(status: int, code: str, detail: str | None = None):
+    payload = {"error": code}
+    if detail:
+        payload["detail"] = detail
+    raise HTTPException(status_code=status, detail=payload)
+
+
 def _parse_hex_bytes(name: str, hex_str: str) -> bytes:
     try:
         v = hex_str.strip().lower()
@@ -46,7 +52,7 @@ def _parse_hex_bytes(name: str, hex_str: str) -> bytes:
             v = "0" + v
         return bytes.fromhex(v)
     except Exception:
-        return HTTPException(status_code=400, detail=f"{name} must be hex")
+        _err(400, "BAD_HEX", f"{name} must be hex")
 
 
 def _generate_recovery_codes(n: int = 10) -> list[str]:
@@ -66,11 +72,24 @@ def _email_sender() -> SmtpEmailSender:
     return SmtpEmailSender()
 
 
+def _mask_email(email: str) -> str:
+    e = (email or "").strip()
+    if "@" not in e:
+        return "********"
+    local, domain = e.split("@", 1)
+    if not local:
+        return f"********@{domain}"
+    first = local[0]
+    return f"{first}{'*' * 7}@{domain}"
+
+
 def _get_user_lang(db: Session, user_id) -> str:
     s = db.query(AppSettings).filter_by(user_id=user_id).first()
     if not s or not isinstance(s.payload, dict):
         return "en"
-    return normalize_lang(s.payload.get("lang"), default="en")
+
+    raw = s.payload.get("language") or s.payload.get("lang")
+    return normalize_lang(raw, default="en")
 
 
 def get_db():
@@ -91,10 +110,7 @@ def get_srp_params():
 def register(data: RegisterIn, db: Session = Depends(get_db)):
     username = data.username.lower().strip()
     if db.query(User).filter_by(username=username).first():
-        raise HTTPException(
-            status_code=409,
-            detail={"error": "USERNAME_TAKEN", "detail": "Username already exists"},
-        )
+        _err(409, "USERNAME_TAKEN", "Username already exists")
 
     salt = _parse_hex_bytes("salt", data.salt)
     verifier = _parse_hex_bytes("verifier", data.verifier)
@@ -105,10 +121,7 @@ def register(data: RegisterIn, db: Session = Depends(get_db)):
     db.refresh(user)
 
     codes_plain = _generate_recovery_codes(10)
-    rows = [
-        RecoveryCode(user_id=user.id, code_hash=hash_recovery_code(c))
-        for c in codes_plain
-    ]
+    rows = [RecoveryCode(user_id=user.id, code_hash=hash_recovery_code(c)) for c in codes_plain]
     db.add_all(rows)
     db.commit()
 
@@ -120,10 +133,7 @@ def login_start(body: LoginStartIn, db: Session = Depends(get_db)):
     username = body.username.lower().strip()
     user = db.query(User).filter_by(username=username).first()
     if not user:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "USER_NOT_FOUND", "detail": "User not found"},
-        )
+        _err(404, "USER_NOT_FOUND", "User not found")
 
     verifier_hex = user.srp_verifier.hex()
     ctx = SRPContext(username, "", prime=PRIME, generator=GENERATOR)
@@ -143,7 +153,7 @@ def login_finish(body: LoginFinishIn, db: Session = Depends(get_db)):
     username = body.username.lower().strip()
     session = active_sessions.get(username)
     if not session:
-        raise HTTPException(status_code=400, detail="No active session")
+        _err(400, "NO_ACTIVE_SESSION", "No active session")
 
     try:
         session.process(body.A, body.salt)
@@ -151,25 +161,14 @@ def login_finish(body: LoginFinishIn, db: Session = Depends(get_db)):
         if not session.verify_proof(client_M1):
             raise ValueError("Proof mismatch")
     except Exception:
-        raise HTTPException(
-            status_code=401,
-            detail={
-                "error": "WRONG_PASSWORD",
-                "detail": "Invalid username or password",
-            },
-        )
+        _err(401, "WRONG_PASSWORD", "Invalid username or password")
 
     user = db.query(User).filter_by(username=username).first()
     if not user:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "USER_NOT_FOUND", "detail": "User not found"},
-        )
+        _err(404, "USER_NOT_FOUND", "User not found")
 
     access_token = tokens.create_access_token({"sub": str(user.id)})
-    refresh_token, refresh_hash, expire = tokens.create_refresh_token(
-        {"sub": str(user.id)}
-    )
+    refresh_token, refresh_hash, expire = tokens.create_refresh_token({"sub": str(user.id)})
 
     db.add(
         Token(
@@ -193,16 +192,16 @@ def login_finish(body: LoginFinishIn, db: Session = Depends(get_db)):
 def refresh_token(old_refresh: dict, db: Session = Depends(get_db)):
     token_str = old_refresh.get("refresh_token")
     if not token_str:
-        raise HTTPException(status_code=400, detail="Missing token")
+        _err(400, "MISSING_TOKEN", "Missing token")
 
     payload = tokens.verify_token(token_str)
     if not payload or payload.get("typ") != "refresh":
-        raise HTTPException(status_code=401, detail="Invalid refresh token")
+        _err(401, "INVALID_REFRESH", "Invalid refresh token")
 
     token_hash = hashlib.sha256(token_str.encode()).digest()
     db_token = db.query(Token).filter_by(token_hash=token_hash, revoked_at=None).first()
     if not db_token:
-        raise HTTPException(status_code=401, detail="Token revoked or missing")
+        _err(401, "TOKEN_REVOKED", "Token revoked or missing")
 
     new_access = tokens.create_access_token({"sub": payload["sub"]})
     return {"access_token": new_access}
@@ -210,9 +209,7 @@ def refresh_token(old_refresh: dict, db: Session = Depends(get_db)):
 
 @router.post("/logout", response_model=GenericOk)
 def logout(user=Depends(get_current_user), db: Session = Depends(get_db)):
-    db.query(Token).filter_by(user_id=user.id, revoked_at=None).update(
-        {"revoked_at": _now_utc()}
-    )
+    db.query(Token).filter_by(user_id=user.id, revoked_at=None).update({"revoked_at": _now_utc()})
     db.commit()
     return GenericOk(detail="logged out")
 
@@ -233,7 +230,7 @@ def email_start_add(
 
     other = db.query(User).filter(User.email == email, User.id != user.id).first()
     if other:
-        raise HTTPException(status_code=409, detail="Email already in use")
+        _err(409, "EMAIL_IN_USE", "Email already in use")
 
     cutoff = _now_utc() - datetime.timedelta(seconds=EMAIL_CODE_RESEND_COOLDOWN_SEC)
     recent = (
@@ -243,7 +240,7 @@ def email_start_add(
         .first()
     )
     if recent:
-        raise HTTPException(status_code=429, detail="Too many requests. Try later.")
+        _err(429, "TOO_MANY_REQUESTS", "Too many requests. Try later.")
 
     db.query(EmailCode).filter_by(
         user_id=user.id, purpose="email_add", target_email=email, consumed_at=None
@@ -270,7 +267,7 @@ def email_start_add(
         sender = _email_sender()
         bg.add_task(sender.send_text, email, subject, text)
     except EmailNotConfigured as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        _err(503, "EMAIL_NOT_CONFIGURED", str(e))
 
     return GenericOk(detail="code_sent")
 
@@ -286,33 +283,31 @@ def email_confirm_add(
 
     row = (
         db.query(EmailCode)
-        .filter_by(
-            user_id=user.id, purpose="email_add", target_email=email, consumed_at=None
-        )
+        .filter_by(user_id=user.id, purpose="email_add", target_email=email, consumed_at=None)
         .order_by(EmailCode.created_at.desc())
         .first()
     )
     if not row:
-        raise HTTPException(status_code=400, detail="No pending code")
+        _err(400, "NO_PENDING_CODE", "No pending code")
 
     if row.expires_at < _now_utc():
-        raise HTTPException(status_code=400, detail="Code expired")
+        _err(400, "CODE_EXPIRED", "Code expired")
 
     if row.attempts >= EMAIL_CODE_MAX_ATTEMPTS:
-        raise HTTPException(status_code=429, detail="Too many attempts")
+        _err(429, "TOO_MANY_ATTEMPTS", "Too many attempts")
 
     expected = hash_email_code("email_add", code, email)
     if row.code_hash != expected:
         row.attempts += 1
         db.commit()
-        raise HTTPException(status_code=400, detail="Wrong code")
+        _err(400, "WRONG_CODE", "Wrong code")
 
     row.consumed_at = _now_utc()
     row.attempts += 1
 
     other = db.query(User).filter(User.email == email, User.id != user.id).first()
     if other:
-        raise HTTPException(status_code=409, detail="Email already in use")
+        _err(409, "EMAIL_IN_USE", "Email already in use")
 
     u = db.query(User).filter_by(id=user.id).first()
     u.email = email
@@ -330,7 +325,7 @@ def email_start_remove(
 ):
     u = db.query(User).filter_by(id=user.id).first()
     if not u.email or not u.email_verified_at:
-        raise HTTPException(status_code=400, detail="No verified email")
+        _err(400, "NO_VERIFIED_EMAIL", "No verified email")
 
     email = u.email.lower().strip()
 
@@ -342,7 +337,7 @@ def email_start_remove(
         .first()
     )
     if recent:
-        raise HTTPException(status_code=429, detail="Too many requests. Try later.")
+        _err(429, "TOO_MANY_REQUESTS", "Too many requests. Try later.")
 
     db.query(EmailCode).filter_by(
         user_id=u.id, purpose="email_remove", target_email=email, consumed_at=None
@@ -369,7 +364,7 @@ def email_start_remove(
         sender = _email_sender()
         bg.add_task(sender.send_text, email, subject, text)
     except EmailNotConfigured as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        _err(503, "EMAIL_NOT_CONFIGURED", str(e))
 
     return GenericOk(detail="code_sent")
 
@@ -382,7 +377,7 @@ def email_confirm_remove(
 ):
     u = db.query(User).filter_by(id=user.id).first()
     if not u.email or not u.email_verified_at:
-        raise HTTPException(status_code=400, detail="No verified email")
+        _err(400, "NO_VERIFIED_EMAIL", "No verified email")
 
     email = u.email.lower().strip()
 
@@ -390,27 +385,22 @@ def email_confirm_remove(
         code = body.code.strip()
         row = (
             db.query(EmailCode)
-            .filter_by(
-                user_id=u.id,
-                purpose="email_remove",
-                target_email=email,
-                consumed_at=None,
-            )
+            .filter_by(user_id=u.id, purpose="email_remove", target_email=email, consumed_at=None)
             .order_by(EmailCode.created_at.desc())
             .first()
         )
         if not row:
-            raise HTTPException(status_code=400, detail="No pending code")
+            _err(400, "NO_PENDING_CODE", "No pending code")
         if row.expires_at < _now_utc():
-            raise HTTPException(status_code=400, detail="Code expired")
+            _err(400, "CODE_EXPIRED", "Code expired")
         if row.attempts >= EMAIL_CODE_MAX_ATTEMPTS:
-            raise HTTPException(status_code=429, detail="Too many attempts")
+            _err(429, "TOO_MANY_ATTEMPTS", "Too many attempts")
 
         expected = hash_email_code("email_remove", code, email)
         if row.code_hash != expected:
             row.attempts += 1
             db.commit()
-            raise HTTPException(status_code=400, detail="Wrong code")
+            _err(400, "WRONG_CODE", "Wrong code")
 
         row.consumed_at = _now_utc()
         row.attempts += 1
@@ -422,20 +412,16 @@ def email_confirm_remove(
     if body.recovery_code:
         rc = body.recovery_code.strip().upper()
         digest = hash_recovery_code(rc)
-        rec = (
-            db.query(RecoveryCode)
-            .filter_by(user_id=u.id, code_hash=digest, used_at=None)
-            .first()
-        )
+        rec = db.query(RecoveryCode).filter_by(user_id=u.id, code_hash=digest, used_at=None).first()
         if not rec:
-            raise HTTPException(status_code=400, detail="Wrong recovery code")
+            _err(400, "WRONG_RECOVERY_CODE", "Wrong recovery code")
         rec.used_at = _now_utc()
         u.email = None
         u.email_verified_at = None
         db.commit()
         return GenericOk(detail="email_removed")
 
-    raise HTTPException(status_code=400, detail="Provide code or recovery_code")
+    _err(400, "MISSING_CODE", "Provide code or recovery_code")
 
 
 @router.post("/password-reset/start", response_model=PasswordResetStartOut)
@@ -443,12 +429,15 @@ def password_reset_start(body: PasswordResetStartIn, db: Session = Depends(get_d
     username = body.username.lower().strip()
     u = db.query(User).filter_by(username=username).first()
     if not u:
-        raise HTTPException(status_code=404, detail="User not found")
+        _err(404, "USER_NOT_FOUND", "User not found")
 
     has_email = bool(u.email and u.email_verified_at)
+
+    masked = _mask_email(u.email) if has_email and u.email else None
+
     return PasswordResetStartOut(
         has_email=has_email,
-        email=(u.email if has_email else None),
+        email=masked,
         has_recovery=True,
     )
 
@@ -464,13 +453,13 @@ def password_reset_email_send(
 
     u = db.query(User).filter_by(username=username).first()
     if not u:
-        raise HTTPException(status_code=404, detail="User not found")
+        _err(404, "USER_NOT_FOUND", "User not found")
 
     if not u.email or not u.email_verified_at:
-        raise HTTPException(status_code=400, detail="Email not set")
+        _err(400, "EMAIL_NOT_SET", "Email not set")
 
     if u.email.lower().strip() != email:
-        raise HTTPException(status_code=400, detail="Email mismatch")
+        _err(400, "EMAIL_MISMATCH", "Email mismatch")
 
     cutoff = _now_utc() - datetime.timedelta(seconds=EMAIL_CODE_RESEND_COOLDOWN_SEC)
     recent = (
@@ -480,7 +469,7 @@ def password_reset_email_send(
         .first()
     )
     if recent:
-        raise HTTPException(status_code=429, detail="Too many requests. Try later.")
+        _err(429, "TOO_MANY_REQUESTS", "Too many requests. Try later.")
 
     db.query(EmailCode).filter_by(
         user_id=u.id, purpose="password_reset", target_email=email, consumed_at=None
@@ -507,7 +496,7 @@ def password_reset_email_send(
         sender = _email_sender()
         bg.add_task(sender.send_text, email, subject, text)
     except EmailNotConfigured as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        _err(503, "EMAIL_NOT_CONFIGURED", str(e))
 
     return GenericOk(detail="code_sent")
 
@@ -523,34 +512,32 @@ def password_reset_email_verify(
 
     u = db.query(User).filter_by(username=username).first()
     if not u:
-        raise HTTPException(status_code=404, detail="User not found")
+        _err(404, "USER_NOT_FOUND", "User not found")
 
     if not u.email or not u.email_verified_at:
-        raise HTTPException(status_code=400, detail="Email not set")
+        _err(400, "EMAIL_NOT_SET", "Email not set")
 
     if u.email.lower().strip() != email:
-        raise HTTPException(status_code=400, detail="Email mismatch")
+        _err(400, "EMAIL_MISMATCH", "Email mismatch")
 
     row = (
         db.query(EmailCode)
-        .filter_by(
-            user_id=u.id, purpose="password_reset", target_email=email, consumed_at=None
-        )
+        .filter_by(user_id=u.id, purpose="password_reset", target_email=email, consumed_at=None)
         .order_by(EmailCode.created_at.desc())
         .first()
     )
     if not row:
-        raise HTTPException(status_code=400, detail="No pending code")
+        _err(400, "NO_PENDING_CODE", "No pending code")
     if row.expires_at < _now_utc():
-        raise HTTPException(status_code=400, detail="Code expired")
+        _err(400, "CODE_EXPIRED", "Code expired")
     if row.attempts >= EMAIL_CODE_MAX_ATTEMPTS:
-        raise HTTPException(status_code=429, detail="Too many attempts")
+        _err(429, "TOO_MANY_ATTEMPTS", "Too many attempts")
 
     expected = hash_email_code("password_reset", code, email)
     if row.code_hash != expected:
         row.attempts += 1
         db.commit()
-        raise HTTPException(status_code=400, detail="Wrong code")
+        _err(400, "WRONG_CODE", "Wrong code")
 
     row.consumed_at = _now_utc()
     row.attempts += 1
@@ -578,17 +565,12 @@ def password_reset_recovery_verify(
 
     u = db.query(User).filter_by(username=username).first()
     if not u:
-        raise HTTPException(status_code=404, detail="User not found")
+        _err(404, "USER_NOT_FOUND", "User not found")
 
     digest = hash_recovery_code(code_plain)
-
-    rec = (
-        db.query(RecoveryCode)
-        .filter_by(user_id=u.id, code_hash=digest, used_at=None)
-        .first()
-    )
+    rec = db.query(RecoveryCode).filter_by(user_id=u.id, code_hash=digest, used_at=None).first()
     if not rec:
-        raise HTTPException(status_code=400, detail="Wrong recovery code")
+        _err(400, "WRONG_RECOVERY_CODE", "Wrong recovery code")
 
     rec.used_at = _now_utc()
 
@@ -609,17 +591,17 @@ def password_reset_recovery_verify(
 def password_reset_finish(body: PasswordResetFinishIn, db: Session = Depends(get_db)):
     sess = db.query(PasswordResetSession).filter_by(id=body.reset_session_id).first()
     if not sess:
-        raise HTTPException(status_code=400, detail="Invalid session")
+        _err(400, "INVALID_SESSION", "Invalid session")
 
     if sess.consumed_at is not None:
-        raise HTTPException(status_code=400, detail="Session already used")
+        _err(400, "SESSION_ALREADY_USED", "Session already used")
 
     if sess.expires_at < _now_utc():
-        raise HTTPException(status_code=400, detail="Session expired")
+        _err(400, "SESSION_EXPIRED", "Session expired")
 
     u = db.query(User).filter_by(id=sess.user_id).first()
     if not u:
-        raise HTTPException(status_code=404, detail="User not found")
+        _err(404, "USER_NOT_FOUND", "User not found")
 
     new_salt = _parse_hex_bytes("new_salt", body.new_salt)
     new_verifier = _parse_hex_bytes("new_verifier", body.new_verifier)
