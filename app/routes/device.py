@@ -1,9 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
 from uuid import UUID
 
-from app.db import SessionLocal
-from app.deps import get_current_user
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+
+from app.deps import get_current_user, get_db
 from app.schemas.device import (
     DeviceCreate,
     DeviceOut,
@@ -21,14 +21,6 @@ def _raise_service_error(exc: ServiceError):
     raise HTTPException(status_code=exc.status_code, detail=exc.detail)
 
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
 @router.get("/", response_model=list[DeviceOut])
 def list_devices(user=Depends(get_current_user), db: Session = Depends(get_db)):
     return device_service.list_devices(db, user.id)
@@ -36,7 +28,9 @@ def list_devices(user=Depends(get_current_user), db: Session = Depends(get_db)):
 
 @router.post("/", response_model=DeviceOut)
 def create_device(
-    device: DeviceCreate, user=Depends(get_current_user), db: Session = Depends(get_db)
+    device: DeviceCreate,
+    user=Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     return device_service.create_device(
         db=db,
@@ -66,7 +60,9 @@ def update_device(
 
 @router.get("/{device_id}/settings", response_model=DeviceSettingsOut)
 def get_settings(
-    device_id: UUID, user=Depends(get_current_user), db: Session = Depends(get_db)
+    device_id: UUID,
+    user=Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     try:
         return device_service.get_device_settings(

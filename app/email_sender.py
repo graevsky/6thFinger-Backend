@@ -19,7 +19,7 @@ class SmtpEmailSender:
         self.from_email = os.getenv("EMAIL_FROM") or self.user
         self.enabled = os.getenv("EMAIL_ENABLED", "true").lower() == "true"
 
-    def _ensure_ready(self) -> None:
+    def ensure_ready(self) -> None:
         if not self.enabled:
             raise EmailNotConfigured("Email sending disabled (EMAIL_ENABLED=false)")
         if not self.user or not self.password or not self.from_email:
@@ -28,7 +28,7 @@ class SmtpEmailSender:
             )
 
     def send_text(self, to_email: str, subject: str, body: str) -> None:
-        self._ensure_ready()
+        self.ensure_ready()
 
         msg = EmailMessage()
         msg["From"] = self.from_email

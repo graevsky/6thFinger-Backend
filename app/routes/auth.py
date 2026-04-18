@@ -2,24 +2,15 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
-from app.deps import get_current_user
+from app.deps import get_current_user, get_db
 from app.email_sender import SmtpEmailSender, EmailNotConfigured
 from app.schemas.auth import *
 from app.services import auth_service
 from app.services.common import ServiceError
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from sqlalchemy.orm import Session
 
 router = APIRouter(prefix="/auth", tags=["auth"])
-
-# for tests, will be removed later
-active_sessions = auth_service.active_sessions
-_now_utc = auth_service.now_utc
-_as_utc = auth_service.as_utc
-_generate_recovery_codes = auth_service.generate_recovery_codes
-_generate_email_code = auth_service.generate_email_code
-_mask_email = auth_service.mask_email
-_get_user_lang = auth_service.get_user_lang
-tokens = auth_service.tokens
-SRPServerSession = auth_service.SRPServerSession
 
 
 def _email_sender() -> SmtpEmailSender:
@@ -37,19 +28,13 @@ def _raise_service_error(exc: ServiceError):
     raise HTTPException(status_code=exc.status_code, detail=exc.detail)
 
 
-def _parse_hex_bytes(name: str, hex_str: str) -> bytes:
+def _get_ready_email_sender() -> SmtpEmailSender:
     try:
-        return auth_service.parse_hex_bytes(name, hex_str)
-    except ServiceError as exc:
-        _raise_service_error(exc)
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+        sender = _email_sender()
+        sender.ensure_ready()
+        return sender
+    except EmailNotConfigured as e:
+        _err(503, "EMAIL_NOT_CONFIGURED", str(e))
 
 
 @router.get("/params", response_model=RegisterParamsOut)
@@ -62,7 +47,10 @@ def get_srp_params():
 def register(data: RegisterIn, db: Session = Depends(get_db)):
     try:
         codes_plain = auth_service.register_user(
-            db, data.username, data.salt, data.verifier
+            db,
+            data.username,
+            data.salt,
+            data.verifier,
         )
     except ServiceError as exc:
         _raise_service_error(exc)
@@ -73,7 +61,6 @@ def register(data: RegisterIn, db: Session = Depends(get_db)):
 @router.post("/login/start", response_model=LoginStartOut)
 def login_start(body: LoginStartIn, db: Session = Depends(get_db)):
     try:
-        auth_service.SRPServerSession = SRPServerSession
         result = auth_service.start_login(db, body.username)
     except ServiceError as exc:
         _raise_service_error(exc)
@@ -109,7 +96,10 @@ def login_finish(body: LoginFinishIn, db: Session = Depends(get_db)):
 @router.post("/refresh")
 def refresh_token(old_refresh: dict, db: Session = Depends(get_db)):
     try:
-        return auth_service.refresh_access_token(db, old_refresh.get("refresh_token"))
+        return auth_service.refresh_access_token(
+            db,
+            old_refresh.get("refresh_token"),
+        )
     except ServiceError as exc:
         _raise_service_error(exc)
 
@@ -133,15 +123,13 @@ def email_start_add(
     db: Session = Depends(get_db),
 ):
     try:
-        message = auth_service.start_add_email(db, user.id, str(body.email))
+        email = auth_service.prepare_email_add(db, user.id, str(body.email))
     except ServiceError as exc:
         _raise_service_error(exc)
 
-    try:
-        sender = _email_sender()
-        bg.add_task(sender.send_text, message.email, message.subject, message.text)
-    except EmailNotConfigured as e:
-        _err(503, "EMAIL_NOT_CONFIGURED", str(e))
+    sender = _get_ready_email_sender()
+    message = auth_service.issue_email_code_message(db, user.id, "email_add", email)
+    bg.add_task(sender.send_text, message.email, message.subject, message.text)
 
     return GenericOk(detail="code_sent")
 
@@ -167,15 +155,13 @@ def email_start_remove(
     db: Session = Depends(get_db),
 ):
     try:
-        message = auth_service.start_remove_email(db, user.id)
+        email = auth_service.prepare_email_remove(db, user.id)
     except ServiceError as exc:
         _raise_service_error(exc)
 
-    try:
-        sender = _email_sender()
-        bg.add_task(sender.send_text, message.email, message.subject, message.text)
-    except EmailNotConfigured as e:
-        _err(503, "EMAIL_NOT_CONFIGURED", str(e))
+    sender = _get_ready_email_sender()
+    message = auth_service.issue_email_code_message(db, user.id, "email_remove", email)
+    bg.add_task(sender.send_text, message.email, message.subject, message.text)
 
     return GenericOk(detail="code_sent")
 
@@ -220,7 +206,7 @@ def password_reset_email_send(
     db: Session = Depends(get_db),
 ):
     try:
-        message = auth_service.password_reset_email_send(
+        user, email = auth_service.prepare_password_reset_email_send(
             db=db,
             username_raw=body.username,
             email_raw=str(body.email),
@@ -228,11 +214,14 @@ def password_reset_email_send(
     except ServiceError as exc:
         _raise_service_error(exc)
 
-    try:
-        sender = _email_sender()
-        bg.add_task(sender.send_text, message.email, message.subject, message.text)
-    except EmailNotConfigured as e:
-        _err(503, "EMAIL_NOT_CONFIGURED", str(e))
+    sender = _get_ready_email_sender()
+    message = auth_service.issue_email_code_message(
+        db,
+        user.id,
+        "password_reset",
+        email,
+    )
+    bg.add_task(sender.send_text, message.email, message.subject, message.text)
 
     return GenericOk(detail="code_sent")
 

@@ -10,9 +10,6 @@ from app.services.common import ServiceError
 
 router = APIRouter(prefix="/avatar", tags=["avatar"])
 
-MAX_AVATAR_SIZE = avatar_service.MAX_AVATAR_SIZE
-_ext_for_content_type = avatar_service.ext_for_content_type
-
 
 def _raise_service_error(exc: ServiceError):
     raise HTTPException(status_code=exc.status_code, detail=exc.detail)
@@ -41,9 +38,7 @@ async def upload_avatar(
 
 
 @router.get("/")
-def get_avatar(
-    user=Depends(get_current_user),
-):
+def get_avatar(user=Depends(get_current_user)):
     try:
         content_type, response = avatar_service.get_avatar_stream(user, get_minio)
     except ServiceError as exc:

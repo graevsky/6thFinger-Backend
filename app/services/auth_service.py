@@ -196,6 +196,7 @@ def finish_login(
             access_token=access_token.encode(),
             token_hash=refresh_hash,
             expires_at=expire,
+            last_used_at=now_utc(),
         )
     )
     db.commit()
@@ -223,12 +224,19 @@ def refresh_access_token(db: Session, refresh_token_raw: str | None) -> dict[str
         _err(401, "TOKEN_REVOKED", "Token revoked or missing")
 
     new_access = tokens.create_access_token({"sub": payload["sub"]})
+    db_token.access_token = new_access.encode()
+    db_token.last_used_at = now_utc()
+    db.commit()
+
     return {"access_token": new_access}
 
 
 def logout_user(db: Session, user_id: UUID) -> None:
     db.query(Token).filter_by(user_id=user_id, revoked_at=None).update(
-        {"revoked_at": now_utc()}
+        {
+            "revoked_at": now_utc(),
+            "last_used_at": now_utc(),
+        }
     )
     db.commit()
 
@@ -353,15 +361,66 @@ def _verify_email_code_or_fail(
     row.attempts += 1
 
 
-def start_add_email(db: Session, user_id, email_raw: str) -> EmailMessageData:
+def _has_unused_recovery_codes(db: Session, user_id) -> bool:
+    return (
+        db.query(RecoveryCode.id).filter_by(user_id=user_id, used_at=None).first()
+        is not None
+    )
+
+
+def prepare_email_add(db: Session, user_id, email_raw: str) -> str:
     email = _normalize_email(email_raw)
 
     _ensure_email_not_in_use(db, email, user_id)
     _ensure_no_recent_code(db, user_id, "email_add", email)
-    _consume_pending_codes(db, user_id, "email_add", email)
 
-    code_plain = _create_email_code(db, user_id, "email_add", email)
-    return _build_email_message(db, user_id, "email_add", email, code_plain)
+    return email
+
+
+def prepare_email_remove(db: Session, user_id) -> str:
+    user = _get_user_by_id_or_404(db, user_id)
+    if not user.email or not user.email_verified_at:
+        _err(400, "NO_VERIFIED_EMAIL", "No verified email")
+
+    email = _normalize_email(user.email)
+    _ensure_no_recent_code(db, user.id, "email_remove", email)
+
+    return email
+
+
+def prepare_password_reset_email_send(
+    db: Session,
+    username_raw: str,
+    email_raw: str,
+) -> tuple[User, str]:
+    user = _get_user_by_username_or_404(db, username_raw)
+    email = _normalize_email(email_raw)
+
+    if not user.email or not user.email_verified_at:
+        _err(400, "EMAIL_NOT_SET", "Email not set")
+
+    if _normalize_email(user.email) != email:
+        _err(400, "EMAIL_MISMATCH", "Email mismatch")
+
+    _ensure_no_recent_code(db, user.id, "password_reset", email)
+
+    return user, email
+
+
+def issue_email_code_message(
+    db: Session,
+    user_id,
+    purpose: str,
+    email: str,
+) -> EmailMessageData:
+    _consume_pending_codes(db, user_id, purpose, email)
+    code_plain = _create_email_code(db, user_id, purpose, email)
+    return _build_email_message(db, user_id, purpose, email, code_plain)
+
+
+def start_add_email(db: Session, user_id, email_raw: str) -> EmailMessageData:
+    email = prepare_email_add(db, user_id, email_raw)
+    return issue_email_code_message(db, user_id, "email_add", email)
 
 
 def confirm_add_email(db: Session, user_id, email_raw: str, code_raw: str) -> None:
@@ -381,17 +440,8 @@ def confirm_add_email(db: Session, user_id, email_raw: str, code_raw: str) -> No
 
 
 def start_remove_email(db: Session, user_id) -> EmailMessageData:
-    user = _get_user_by_id_or_404(db, user_id)
-    if not user.email or not user.email_verified_at:
-        _err(400, "NO_VERIFIED_EMAIL", "No verified email")
-
-    email = _normalize_email(user.email)
-
-    _ensure_no_recent_code(db, user.id, "email_remove", email)
-    _consume_pending_codes(db, user.id, "email_remove", email)
-
-    code_plain = _create_email_code(db, user.id, "email_remove", email)
-    return _build_email_message(db, user.id, "email_remove", email, code_plain)
+    email = prepare_email_remove(db, user_id)
+    return issue_email_code_message(db, user_id, "email_remove", email)
 
 
 def confirm_remove_email(
@@ -441,11 +491,12 @@ def password_reset_start(db: Session, username_raw: str) -> PasswordResetStartDa
 
     has_email = bool(user.email and user.email_verified_at)
     masked = mask_email(user.email) if has_email and user.email else None
+    has_recovery = _has_unused_recovery_codes(db, user.id)
 
     return PasswordResetStartData(
         has_email=has_email,
         email=masked,
-        has_recovery=True,
+        has_recovery=has_recovery,
     )
 
 
@@ -454,20 +505,8 @@ def password_reset_email_send(
     username_raw: str,
     email_raw: str,
 ) -> EmailMessageData:
-    user = _get_user_by_username_or_404(db, username_raw)
-    email = _normalize_email(email_raw)
-
-    if not user.email or not user.email_verified_at:
-        _err(400, "EMAIL_NOT_SET", "Email not set")
-
-    if _normalize_email(user.email) != email:
-        _err(400, "EMAIL_MISMATCH", "Email mismatch")
-
-    _ensure_no_recent_code(db, user.id, "password_reset", email)
-    _consume_pending_codes(db, user.id, "password_reset", email)
-
-    code_plain = _create_email_code(db, user.id, "password_reset", email)
-    return _build_email_message(db, user.id, "password_reset", email, code_plain)
+    user, email = prepare_password_reset_email_send(db, username_raw, email_raw)
+    return issue_email_code_message(db, user.id, "password_reset", email)
 
 
 def password_reset_email_verify(
