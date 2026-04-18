@@ -1,24 +1,21 @@
-import io
 from fastapi import APIRouter, Depends, File, UploadFile, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.deps import get_current_user, get_db
-from app.minio_client import get_minio, MINIO_BUCKET
+from app.minio_client import get_minio
 from app.schemas.avatar import AvatarOut
+from app.services import avatar_service
+from app.services.common import ServiceError
 
 router = APIRouter(prefix="/avatar", tags=["avatar"])
 
-MAX_AVATAR_SIZE = 6 * 1024 * 1024  # 6 MB
+MAX_AVATAR_SIZE = avatar_service.MAX_AVATAR_SIZE
+_ext_for_content_type = avatar_service.ext_for_content_type
 
 
-def _ext_for_content_type(ct: str) -> str:
-    ct = (ct or "").lower()
-    if ct == "image/png":
-        return "png"
-    if ct == "image/webp":
-        return "webp"
-    return "jpg"
+def _raise_service_error(exc: ServiceError):
+    raise HTTPException(status_code=exc.status_code, detail=exc.detail)
 
 
 @router.post("/", response_model=AvatarOut)
@@ -27,66 +24,30 @@ async def upload_avatar(
     user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if not file or not file.content_type:
-        raise HTTPException(status_code=400, detail="Missing file")
-
-    content_type = file.content_type.lower().strip()
-    if content_type not in ("image/png", "image/jpeg", "image/webp"):
-        raise HTTPException(status_code=400, detail="Unsupported file type")
-
     data = await file.read()
-    if not data:
-        raise HTTPException(status_code=400, detail="Empty file")
-    if len(data) > MAX_AVATAR_SIZE:
-        raise HTTPException(status_code=400, detail="File too large")
 
-    client = get_minio()
-    ext = _ext_for_content_type(content_type)
-    new_key = f"avatars/{user.id}.{ext}"
+    try:
+        result = avatar_service.upload_avatar(
+            db=db,
+            user=user,
+            get_minio_client=get_minio,
+            data=data,
+            content_type=file.content_type,
+        )
+    except ServiceError as exc:
+        _raise_service_error(exc)
 
-    old_key = getattr(user, "avatar_key", None)
-    if old_key and old_key != new_key:
-        try:
-            client.remove_object(MINIO_BUCKET, old_key)
-        except Exception:
-            pass
-
-    client.put_object(
-        MINIO_BUCKET,
-        new_key,
-        io.BytesIO(data),
-        length=len(data),
-        content_type=content_type,
-    )
-
-    user.avatar_key = new_key
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-
-    return AvatarOut(key=new_key, content_type=content_type)
+    return AvatarOut(key=result.key, content_type=result.content_type)
 
 
 @router.get("/")
 def get_avatar(
     user=Depends(get_current_user),
 ):
-    key = getattr(user, "avatar_key", None)
-    if not key:
-        raise HTTPException(status_code=404, detail="No avatar found")
-
-    client = get_minio()
-
     try:
-        stat_obj = client.stat_object(MINIO_BUCKET, key)
-        content_type = stat_obj.content_type or "image/jpeg"
-    except Exception:
-        content_type = "image/jpeg"
-
-    try:
-        response = client.get_object(MINIO_BUCKET, key)
-    except Exception:
-        raise HTTPException(status_code=404, detail="Avatar not found")
+        content_type, response = avatar_service.get_avatar_stream(user, get_minio)
+    except ServiceError as exc:
+        _raise_service_error(exc)
 
     def iterator():
         try:
@@ -108,14 +69,5 @@ def delete_avatar(
     user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    key = getattr(user, "avatar_key", None)
-    if key:
-        try:
-            get_minio().remove_object(MINIO_BUCKET, key)
-        except Exception:
-            pass
-
-    user.avatar_key = None
-    db.add(user)
-    db.commit()
+    avatar_service.delete_avatar(db, user, get_minio)
     return

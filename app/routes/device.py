@@ -1,11 +1,9 @@
-import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from uuid import UUID
 
 from app.db import SessionLocal
 from app.deps import get_current_user
-from app.models.device import Device, DeviceSettings
 from app.schemas.device import (
     DeviceCreate,
     DeviceOut,
@@ -13,9 +11,14 @@ from app.schemas.device import (
     DeviceSettingsOut,
     DeviceUpdate,
 )
-
+from app.services import device_service
+from app.services.common import ServiceError
 
 router = APIRouter(prefix="/device", tags=["device"])
+
+
+def _raise_service_error(exc: ServiceError):
+    raise HTTPException(status_code=exc.status_code, detail=exc.detail)
 
 
 def get_db():
@@ -28,18 +31,19 @@ def get_db():
 
 @router.get("/", response_model=list[DeviceOut])
 def list_devices(user=Depends(get_current_user), db: Session = Depends(get_db)):
-    return db.query(Device).filter_by(owner_id=user.id).all()
+    return device_service.list_devices(db, user.id)
 
 
 @router.post("/", response_model=DeviceOut)
 def create_device(
     device: DeviceCreate, user=Depends(get_current_user), db: Session = Depends(get_db)
 ):
-    dev = Device(owner_id=user.id, address=device.address, alias=device.alias)
-    db.add(dev)
-    db.commit()
-    db.refresh(dev)
-    return dev
+    return device_service.create_device(
+        db=db,
+        user_id=user.id,
+        address=device.address,
+        alias=device.alias,
+    )
 
 
 @router.put("/{device_id}", response_model=DeviceOut)
@@ -49,33 +53,29 @@ def update_device(
     user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    device = db.query(Device).filter_by(id=device_id, owner_id=user.id).first()
-    if not device:
-        raise HTTPException(status_code=404, detail="Device not found")
-
-    device.alias = data.alias
-    db.commit()
-    db.refresh(device)
-    return device
+    try:
+        return device_service.update_device_alias(
+            db=db,
+            user_id=user.id,
+            device_id=device_id,
+            alias=data.alias,
+        )
+    except ServiceError as exc:
+        _raise_service_error(exc)
 
 
 @router.get("/{device_id}/settings", response_model=DeviceSettingsOut)
 def get_settings(
     device_id: UUID, user=Depends(get_current_user), db: Session = Depends(get_db)
 ):
-    device = db.query(Device).filter_by(id=device_id, owner_id=user.id).first()
-    if not device:
-        raise HTTPException(status_code=404, detail="Device not found")
-
-    settings = (
-        db.query(DeviceSettings)
-        .filter_by(device_id=device_id)
-        .order_by(DeviceSettings.updated_at.desc())
-        .first()
-    )
-    if not settings:
-        raise HTTPException(status_code=404, detail="Settings not found")
-    return settings
+    try:
+        return device_service.get_device_settings(
+            db=db,
+            user_id=user.id,
+            device_id=device_id,
+        )
+    except ServiceError as exc:
+        _raise_service_error(exc)
 
 
 @router.post("/{device_id}/settings", response_model=DeviceSettingsOut)
@@ -85,32 +85,12 @@ def update_settings(
     user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    device = db.query(Device).filter_by(id=device_id, owner_id=user.id).first()
-    if not device:
-        raise HTTPException(status_code=404, detail="Device not found")
-
-    now = datetime.datetime.now(datetime.timezone.utc)
-
-    settings = (
-        db.query(DeviceSettings)
-        .filter_by(device_id=device.id)
-        .order_by(DeviceSettings.updated_at.desc())
-        .first()
-    )
-
-    if settings:
-        settings.version = (settings.version or 0) + 1
-        settings.payload = data.payload
-        settings.updated_at = now
-    else:
-        settings = DeviceSettings(
-            device_id=device.id,
-            version=1,
+    try:
+        return device_service.update_device_settings(
+            db=db,
+            user_id=user.id,
+            device_id=device_id,
             payload=data.payload,
-            updated_at=now,
         )
-        db.add(settings)
-
-    db.commit()
-    db.refresh(settings)
-    return settings
+    except ServiceError as exc:
+        _raise_service_error(exc)
