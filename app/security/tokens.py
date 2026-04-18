@@ -6,13 +6,19 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-SECRET_KEY = os.getenv("JWT_SECRET")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 10
-REFRESH_TOKEN_EXPIRE_DAYS = 30
+SECRET_KEY = os.getenv("JWT_SECRET")  # JWT secret key from environment
+ALGORITHM = "HS256"  # hasing algorithm for JWT
+ACCESS_TOKEN_EXPIRE_MINUTES = 10  # Access token expiration time
+REFRESH_TOKEN_EXPIRE_DAYS = 30  # Refresh token expiration time
 
 
 def create_access_token(data: dict) -> str:
+    """Generate a signed short-lived access token.
+
+    The token always gets:
+    - exp: expiration timestamp
+    - typ: explicit token type
+    """
     to_encode = data.copy()
     expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire, "typ": "access"})
@@ -20,6 +26,10 @@ def create_access_token(data: dict) -> str:
 
 
 def create_refresh_token(data: dict) -> tuple[str, bytes, datetime]:
+    """Generate a signed refresh token and hash.
+
+    The plain refresh token is returned to the client, while only its SHA-256 hash stored.
+    """
     expire = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
     to_encode = data.copy()
     to_encode.update({"exp": expire, "typ": "refresh"})
@@ -29,6 +39,10 @@ def create_refresh_token(data: dict) -> tuple[str, bytes, datetime]:
 
 
 def verify_token(token: str) -> dict:
+    """Decode and validate a JWT.
+
+    Returns decoded payload on success. Otherwise, returns an empty dict.
+    """
     try:
         return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     except jwt.PyJWTError:

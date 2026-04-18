@@ -4,14 +4,20 @@ from datetime import datetime
 
 
 class AppSettingsOut(BaseModel):
-    id: UUID
-    user_id: UUID
-    payload: dict
-    updated_at: datetime
+    """Mobile app settings stored for the current user."""
+
+    id: UUID = Field(..., description="Settings record id.")
+    user_id: UUID = Field(..., description="Id of the user these settings belong to.")
+    payload: dict = Field(..., description="User settings JSON payload.")
+    updated_at: datetime = Field(
+        ..., description="Timestamp of the last settings update."
+    )
 
     class Config:
         orm_mode = True
 
 
 class AppSettingsIn(BaseModel):
-    payload: dict = Field(..., description="usr settings json")
+    """Payload used to update mobile app settings."""
+
+    payload: dict = Field(..., description="User settings JSON payload.")

@@ -14,10 +14,12 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 def _email_sender() -> SmtpEmailSender:
+    """Create SMTP sender instance for email-based flows"""
     return SmtpEmailSender()
 
 
 def _err(status: int, code: str, detail: str | None = None):
+    """Raise a unified HTTP error payload used by auth endpoints"""
     payload = {"error": code}
     if detail:
         payload["detail"] = detail
@@ -25,10 +27,14 @@ def _err(status: int, code: str, detail: str | None = None):
 
 
 def _raise_service_error(exc: ServiceError):
+    """Convert service-layer error into FastAPI HTTPException"""
     raise HTTPException(status_code=exc.status_code, detail=exc.detail)
 
 
 def _get_ready_email_sender() -> SmtpEmailSender:
+    """
+    Build and validate email sender before scheduling background send
+    """
     try:
         sender = _email_sender()
         sender.ensure_ready()
@@ -37,14 +43,24 @@ def _get_ready_email_sender() -> SmtpEmailSender:
         _err(503, "EMAIL_NOT_CONFIGURED", str(e))
 
 
-@router.get("/params", response_model=RegisterParamsOut)
+@router.get("/params", response_model=RegisterParamsOut, summary="Get SRP parameters")
 def get_srp_params():
+    """Return public SRP constants required by the client during auth flow"""
     constants = auth_service.get_srp_params()
     return RegisterParamsOut(N=constants["N"], g=constants["g"])
 
 
-@router.post("/register", status_code=201, response_model=RegisterOut)
+@router.post(
+    "/register",
+    status_code=201,
+    response_model=RegisterOut,
+    summary="Register new user",
+)
 def register(data: RegisterIn, db: Session = Depends(get_db)):
+    """
+    Create a new user with SRP credentials.
+    Returns generated recovery codes once.
+    """
     try:
         codes_plain = auth_service.register_user(
             db,
@@ -58,8 +74,13 @@ def register(data: RegisterIn, db: Session = Depends(get_db)):
     return RegisterOut(detail="registered", recovery_codes=codes_plain)
 
 
-@router.post("/login/start", response_model=LoginStartOut)
+@router.post(
+    "/login/start",
+    response_model=LoginStartOut,
+    summary="Start SRP login",
+)
 def login_start(body: LoginStartIn, db: Session = Depends(get_db)):
+    """Start SRP authentication and return server challenge values."""
     try:
         result = auth_service.start_login(db, body.username)
     except ServiceError as exc:
@@ -73,8 +94,16 @@ def login_start(body: LoginStartIn, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/login/finish", response_model=LoginFinishOut)
+@router.post(
+    "/login/finish",
+    response_model=LoginFinishOut,
+    summary="Finish SRP login",
+)
 def login_finish(body: LoginFinishIn, db: Session = Depends(get_db)):
+    """
+    Complete SRP authentication.
+    On success returns access and refresh tokens.
+    """
     try:
         result = auth_service.finish_login(
             db=db,
@@ -93,8 +122,12 @@ def login_finish(body: LoginFinishIn, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/refresh")
+@router.post(
+    "/refresh",
+    summary="Refresh access token",
+)
 def refresh_token(old_refresh: dict, db: Session = Depends(get_db)):
+    """Issue a new access token using a valid refresh token."""
     try:
         return auth_service.refresh_access_token(
             db,
@@ -104,24 +137,43 @@ def refresh_token(old_refresh: dict, db: Session = Depends(get_db)):
         _raise_service_error(exc)
 
 
-@router.post("/logout", response_model=GenericOk)
+@router.post(
+    "/logout",
+    response_model=GenericOk,
+    summary="Logout current user",
+)
 def logout(user=Depends(get_current_user), db: Session = Depends(get_db)):
+    """
+    Revoke all active token records for the current user.
+    """
     auth_service.logout_user(db, user.id)
     return GenericOk(detail="logged out")
 
 
-@router.get("/me")
+@router.get(
+    "/me",
+    summary="Get current user",
+)
 def get_me(user=Depends(get_current_user)):
+    """Return basic profile data for the authenticated user."""
     return auth_service.get_me_data(user)
 
 
-@router.post("/email/start-add", response_model=GenericOk)
+@router.post(
+    "/email/start-add",
+    response_model=GenericOk,
+    summary="Send email add confirmation code",
+)
 def email_start_add(
     body: EmailStartAddIn,
     bg: BackgroundTasks,
     user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """
+    Start verified email attachment flow.
+    Creates a one-time code and sends it to the requested email address.
+    """
     try:
         email = auth_service.prepare_email_add(db, user.id, str(body.email))
     except ServiceError as exc:
@@ -134,12 +186,17 @@ def email_start_add(
     return GenericOk(detail="code_sent")
 
 
-@router.post("/email/confirm-add", response_model=GenericOk)
+@router.post(
+    "/email/confirm-add",
+    response_model=GenericOk,
+    summary="Confirm email add",
+)
 def email_confirm_add(
     body: EmailConfirmIn,
     user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Verify email code and attach verified email to the current user."""
     try:
         auth_service.confirm_add_email(db, user.id, str(body.email), body.code)
     except ServiceError as exc:
@@ -148,12 +205,20 @@ def email_confirm_add(
     return GenericOk(detail="email_verified")
 
 
-@router.post("/email/start-remove", response_model=GenericOk)
+@router.post(
+    "/email/start-remove",
+    response_model=GenericOk,
+    summary="Send email removal confirmation code",
+)
 def email_start_remove(
     bg: BackgroundTasks,
     user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """
+    Start verified email removal flow.
+    Sends confirmation code to the currently verified email address.
+    """
     try:
         email = auth_service.prepare_email_remove(db, user.id)
     except ServiceError as exc:
@@ -166,12 +231,20 @@ def email_start_remove(
     return GenericOk(detail="code_sent")
 
 
-@router.post("/email/confirm-remove", response_model=GenericOk)
+@router.post(
+    "/email/confirm-remove",
+    response_model=GenericOk,
+    summary="Confirm email removal",
+)
 def email_confirm_remove(
     body: EmailRemoveConfirmIn,
     user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """
+    Remove verified email from the current account.
+    Confirmation can be done either by email code or by recovery code.
+    """
     try:
         auth_service.confirm_remove_email(
             db=db,
@@ -185,8 +258,16 @@ def email_confirm_remove(
     return GenericOk(detail="email_removed")
 
 
-@router.post("/password-reset/start", response_model=PasswordResetStartOut)
+@router.post(
+    "/password-reset/start",
+    response_model=PasswordResetStartOut,
+    summary="Start password reset flow",
+)
 def password_reset_start(body: PasswordResetStartIn, db: Session = Depends(get_db)):
+    """
+    Check which password reset methods are available for a user.
+    Returns whether verified email and unused recovery codes exist.
+    """
     try:
         result = auth_service.password_reset_start(db, body.username)
     except ServiceError as exc:
@@ -199,12 +280,19 @@ def password_reset_start(body: PasswordResetStartIn, db: Session = Depends(get_d
     )
 
 
-@router.post("/password-reset/email/send", response_model=GenericOk)
+@router.post(
+    "/password-reset/email/send",
+    response_model=GenericOk,
+    summary="Send password reset email code",
+)
 def password_reset_email_send(
     body: PasswordResetEmailSendIn,
     bg: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
+    """
+    Send one-time password reset code to the verified email.
+    """
     try:
         user, email = auth_service.prepare_password_reset_email_send(
             db=db,
@@ -226,11 +314,19 @@ def password_reset_email_send(
     return GenericOk(detail="code_sent")
 
 
-@router.post("/password-reset/email/verify", response_model=PasswordResetVerifyOut)
+@router.post(
+    "/password-reset/email/verify",
+    response_model=PasswordResetVerifyOut,
+    summary="Verify password reset email code",
+)
 def password_reset_email_verify(
     body: PasswordResetEmailVerifyIn,
     db: Session = Depends(get_db),
 ):
+    """
+    Verify password reset email code.
+    On success creates short-lived reset session used by the finish step.
+    """
     try:
         reset_session_id = auth_service.password_reset_email_verify(
             db=db,
@@ -244,11 +340,19 @@ def password_reset_email_verify(
     return PasswordResetVerifyOut(reset_session_id=reset_session_id)
 
 
-@router.post("/password-reset/recovery/verify", response_model=PasswordResetVerifyOut)
+@router.post(
+    "/password-reset/recovery/verify",
+    response_model=PasswordResetVerifyOut,
+    summary="Verify password reset recovery code",
+)
 def password_reset_recovery_verify(
     body: PasswordResetRecoveryVerifyIn,
     db: Session = Depends(get_db),
 ):
+    """
+    Verify backup recovery code for password reset.
+    On success creates short-lived reset session used by the finish step.
+    """
     try:
         reset_session_id = auth_service.password_reset_recovery_verify(
             db=db,
@@ -261,8 +365,15 @@ def password_reset_recovery_verify(
     return PasswordResetVerifyOut(reset_session_id=reset_session_id)
 
 
-@router.post("/password-reset/finish", response_model=GenericOk)
+@router.post(
+    "/password-reset/finish",
+    response_model=GenericOk,
+    summary="Finish password reset",
+)
 def password_reset_finish(body: PasswordResetFinishIn, db: Session = Depends(get_db)):
+    """
+    Replace SRP credentials using a valid reset session.
+    """
     try:
         auth_service.password_reset_finish(
             db=db,

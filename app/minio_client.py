@@ -2,11 +2,17 @@ import os
 from functools import lru_cache
 from minio import Minio
 
+# Shared bucket name for avatar storage
 MINIO_BUCKET = os.getenv("MINIO_BUCKET", "avatarts")
 
 
 @lru_cache()
 def get_minio() -> Minio:
+    """
+    Create and cache a MinIO client instance.
+    The client is initialized once per process.
+    Bucket existence is also ensured here so avatar code can rely on it.
+    """
     endpoint = os.getenv("MINIO_ENDPOINT", "localhost:9000")
     access_key = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
     secret_key = os.getenv("MINIO_SECRET_KEY", "minioadmin")

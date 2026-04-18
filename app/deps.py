@@ -11,6 +11,7 @@ auth_scheme = HTTPBearer()
 
 
 def get_db():
+    """Provide a DB session for a single request and always close it afterwards."""
     db = SessionLocal()
     try:
         yield db
@@ -21,6 +22,15 @@ def get_db():
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(auth_scheme), db=Depends(get_db)
 ):
+    """
+    Resolve the current user from Authorization token
+
+    Validation is done in several steps:
+    - JWT must be decodable and contain user id in "sub"
+    - refresh tokens are never accepted as access tokens
+    - access token must exist in DB and must not be revoked
+    - token owner from DB must match JWT payload
+    """
     token = credentials.credentials
     payload = tokens.verify_token(token)
     if not payload or "sub" not in payload:
@@ -30,6 +40,7 @@ def get_current_user(
 
     token_type = payload.get("typ")
 
+    # Refresh token is explicitly rejected on protected routes
     if token_type == "refresh":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -42,6 +53,7 @@ def get_current_user(
             detail="Invalid token",
         )
 
+    # Access token must be present in storage and still active.
     db_token = (
         db.query(Token).filter_by(access_token=token.encode(), revoked_at=None).first()
     )
@@ -51,6 +63,7 @@ def get_current_user(
             detail="Invalid token",
         )
 
+    # Token row must belong to the same user as JWT payload.
     if str(db_token.user_id) != str(payload["sub"]):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -63,6 +76,7 @@ def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found"
         )
 
+    # Update token usage timestamp so the backend can track recent activity.
     db_token.last_used_at = now_utc()
     db.commit()
 

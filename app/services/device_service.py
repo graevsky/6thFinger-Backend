@@ -7,10 +7,12 @@ from app.services.common import ServiceError, now_utc
 
 
 def list_devices(db: Session, user_id) -> list[Device]:
+    """Return all devices owned by the current user."""
     return db.query(Device).filter_by(owner_id=user_id).all()
 
 
 def create_device(db: Session, user_id, address: str, alias: str | None) -> Device:
+    """Create a new device linked to the current user."""
     device = Device(owner_id=user_id, address=address, alias=alias)
     db.add(device)
     db.commit()
@@ -21,6 +23,7 @@ def create_device(db: Session, user_id, address: str, alias: str | None) -> Devi
 def update_device_alias(
     db: Session, user_id, device_id: UUID, alias: str | None
 ) -> Device:
+    """Update alias only for a device owned by the current user."""
     device = db.query(Device).filter_by(id=device_id, owner_id=user_id).first()
     if not device:
         raise ServiceError(status_code=404, detail="Device not found")
@@ -32,6 +35,7 @@ def update_device_alias(
 
 
 def get_device_settings(db: Session, user_id, device_id: UUID) -> DeviceSettings:
+    """Return the latest settings snapshot for the device."""
     device = db.query(Device).filter_by(id=device_id, owner_id=user_id).first()
     if not device:
         raise ServiceError(status_code=404, detail="Device not found")
@@ -54,6 +58,7 @@ def update_device_settings(
     device_id: UUID,
     payload: dict,
 ) -> DeviceSettings:
+    """Create the first settings row or update the latest one."""
     device = db.query(Device).filter_by(id=device_id, owner_id=user_id).first()
     if not device:
         raise ServiceError(status_code=404, detail="Device not found")

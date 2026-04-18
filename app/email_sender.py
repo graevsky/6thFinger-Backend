@@ -7,11 +7,16 @@ load_dotenv()
 
 
 class EmailNotConfigured(RuntimeError):
+    """Raised when email sending is disabled or required SMTP settings are missing. Not used for now"""
+
     pass
 
 
 class SmtpEmailSender:
+    """Simple SMTP sender used for verification and recovery emails."""
+
     def __init__(self) -> None:
+        # Currently Gmail SMTP is used for ease of setup
         self.host = os.getenv("SMTP_HOST", "smtp.gmail.com")
         self.port = int(os.getenv("SMTP_PORT", "587"))
         self.user = os.getenv("GMAIL_USER")
@@ -20,6 +25,7 @@ class SmtpEmailSender:
         self.enabled = os.getenv("EMAIL_ENABLED", "true").lower() == "true"
 
     def ensure_ready(self) -> None:
+        """Validate that email sending is enabled and SMTP credentials are present."""
         if not self.enabled:
             raise EmailNotConfigured("Email sending disabled (EMAIL_ENABLED=false)")
         if not self.user or not self.password or not self.from_email:
@@ -28,6 +34,7 @@ class SmtpEmailSender:
             )
 
     def send_text(self, to_email: str, subject: str, body: str) -> None:
+        """Send a plain-text email via SMTP with STARTTLS."""
         self.ensure_ready()
 
         msg = EmailMessage()
@@ -36,6 +43,7 @@ class SmtpEmailSender:
         msg["Subject"] = subject
         msg.set_content(body)
 
+        # SMTP FLOW: open SMTP connection, switch to TLS, authenticate, then send the message
         with smtplib.SMTP(self.host, self.port, timeout=20) as smtp:
             smtp.ehlo()
             smtp.starttls()

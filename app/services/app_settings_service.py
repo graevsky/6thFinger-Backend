@@ -5,10 +5,12 @@ from app.models.app_settings import AppSettings
 from app.services.common import now_utc
 
 
+# Default app settings
 DEFAULT_PAYLOAD = {"language": "en"}
 
 
 def get_settings(db: Session, user_id) -> AppSettings:
+    """Return user settings, creating defaults if needed."""
     settings = db.query(AppSettings).filter_by(user_id=user_id).first()
 
     if not settings:
@@ -30,6 +32,7 @@ def get_settings(db: Session, user_id) -> AppSettings:
 
 
 def update_settings(db: Session, user_id, payload: dict) -> AppSettings:
+    """Merge incoming settings into the current payload."""
     settings = db.query(AppSettings).filter_by(user_id=user_id).first()
 
     incoming = payload if isinstance(payload, dict) else {}
@@ -53,6 +56,7 @@ def update_settings(db: Session, user_id, payload: dict) -> AppSettings:
         merged_payload = dict(current)
         merged_payload.update(incoming)
 
+        # Ensure language always exists even if an old row is incomplete.
         if "language" not in merged_payload:
             merged_payload["language"] = "en"
 
