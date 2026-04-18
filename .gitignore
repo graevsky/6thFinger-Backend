@@ -29,3 +29,5 @@ logs/
 util_files/
 
 minio-data/
+
+.coverage
