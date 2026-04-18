@@ -4,10 +4,11 @@ import secrets
 import string
 from dataclasses import dataclass
 from uuid import UUID
-
 from sqlalchemy.orm import Session
 from srptools import SRPContext, SRPServerSession
 from srptools.constants import PRIME_2048, PRIME_2048_GEN
+import os
+from redis.exceptions import RedisError
 
 from app.locale.i18n_email import build_email, normalize_lang
 from app.models.app_settings import AppSettings
@@ -19,7 +20,7 @@ from app.models.user import User
 from app.security import srp as srp_utils, tokens
 from app.security.hashing import hash_email_code, hash_recovery_code
 from app.services.common import ServiceError, now_utc, as_utc
-
+from app.redis_client import get_redis
 
 # SRP public parameters
 PRIME = PRIME_2048
@@ -31,8 +32,9 @@ EMAIL_CODE_MAX_ATTEMPTS = 5
 EMAIL_CODE_RESEND_COOLDOWN_SEC = 60
 RESET_SESSION_TTL_MIN = 15
 
-# In-memory SRP sessions keyed by normalized username. Temp solution ofc.
-active_sessions: dict[str, SRPServerSession] = {}
+# SRP login state must survive between /login/start and /login/finish,
+SRP_SESSION_TTL_SEC = int(os.getenv("SRP_SESSION_TTL_SEC", "300"))
+SRP_SESSION_KEY_PREFIX = "auth:srp:session"
 
 
 @dataclass(frozen=True)
@@ -78,6 +80,73 @@ def _err(status: int, code: str, detail: str | None = None) -> None:
     if detail:
         payload["detail"] = detail
     raise ServiceError(status_code=status, detail=payload)
+
+
+def _normalize_username(username_raw: str) -> str:
+    """Lowcase and trim username for storage and comparisons."""
+    return username_raw.lower().strip()
+
+
+def _srp_session_key(username: str) -> str:
+    """Redis key for storing SRP session state for a given username."""
+    return f"{SRP_SESSION_KEY_PREFIX}:{username}"
+
+
+def _store_srp_session(username: str, session: SRPServerSession) -> None:
+    """Persist SRP session state in Redis with a TTL."""
+    try:
+        get_redis().set(
+            _srp_session_key(username),
+            session.private,
+            ex=SRP_SESSION_TTL_SEC,
+        )
+    except RedisError:
+        _err(
+            503,
+            "SRP_SESSION_STORE_UNAVAILABLE",
+            "Temporary authentication storage unavailable",
+        )
+
+
+def _get_srp_session_private(username: str) -> str | None:
+    """Retrieve SRP session private state from Redis."""
+    try:
+        return get_redis().get(_srp_session_key(username))
+    except RedisError:
+        _err(
+            503,
+            "SRP_SESSION_STORE_UNAVAILABLE",
+            "Temporary authentication storage unavailable",
+        )
+
+
+def _delete_srp_session(username: str) -> None:
+    """Delete SRP session state from Redis."""
+    try:
+        get_redis().delete(_srp_session_key(username))
+    except RedisError:
+        _err(
+            503,
+            "SRP_SESSION_STORE_UNAVAILABLE",
+            "Temporary authentication storage unavailable",
+        )
+
+
+def _restore_srp_session(
+    username: str,
+    verifier_hex: str,
+    session_private: str,
+) -> SRPServerSession:
+    """Restore SRP server session from Redis state."""
+    try:
+        ctx = SRPContext(username, "", prime=PRIME, generator=GENERATOR)
+        return SRPServerSession(ctx, verifier_hex, private=session_private)
+    except Exception:
+        _err(
+            503,
+            "SRP_SESSION_STORE_UNAVAILABLE",
+            "Temporary authentication storage unavailable",
+        )
 
 
 def parse_hex_bytes(name: str, hex_str: str) -> bytes:
@@ -140,7 +209,7 @@ def register_user(
     db: Session, username_raw: str, salt_hex: str, verifier_hex: str
 ) -> list[str]:
     """Create a new user and initial recovery codes."""
-    username = username_raw.lower().strip()
+    username = _normalize_username(username_raw)
     if db.query(User).filter_by(username=username).first():
         _err(409, "USERNAME_TAKEN", "Username already exists")
 
@@ -166,7 +235,7 @@ def register_user(
 
 def start_login(db: Session, username_raw: str) -> LoginStartData:
     """Start SRP login by creating a temporary server stored session."""
-    username = username_raw.lower().strip()
+    username = _normalize_username(username_raw)
     user = db.query(User).filter_by(username=username).first()
     if not user:
         _err(404, "USER_NOT_FOUND", "User not found")
@@ -174,7 +243,9 @@ def start_login(db: Session, username_raw: str) -> LoginStartData:
     verifier_hex = user.srp_verifier.hex()
     ctx = SRPContext(username, "", prime=PRIME, generator=GENERATOR)
     server_session = SRPServerSession(ctx, verifier_hex)
-    active_sessions[username] = server_session
+
+    # Save transient SRP state in Redis so login can continue
+    _store_srp_session(username, server_session)
 
     return LoginStartData(
         salt=user.srp_salt.hex(),
@@ -192,23 +263,25 @@ def finish_login(
     salt: str,
 ) -> LoginFinishData:
     """Finish SRP login and issue JWT tokens on successful proof verification."""
-    username = username_raw.lower().strip()
-    session = active_sessions.get(username)
-    if not session:
+    username = _normalize_username(username_raw)
+    session_private = _get_srp_session_private(username)
+    if not session_private:
         _err(400, "NO_ACTIVE_SESSION", "No active session")
 
+    user = db.query(User).filter_by(username=username).first()
+    if not user:
+        _err(404, "USER_NOT_FOUND", "User not found")
+
+    verifier_hex = user.srp_verifier.hex()
+    session = _restore_srp_session(username, verifier_hex, session_private)
+
     try:
-        # SRP session validates client values and verifies client
         session.process(A, salt)
         client_M1 = M1.encode("ascii")
         if not session.verify_proof(client_M1):
             raise ValueError("Proof mismatch")
     except Exception:
         _err(401, "WRONG_PASSWORD", "Invalid username or password")
-
-    user = db.query(User).filter_by(username=username).first()
-    if not user:
-        _err(404, "USER_NOT_FOUND", "User not found")
 
     access_token = tokens.create_access_token({"sub": str(user.id)})
     refresh_token, refresh_hash, expire = tokens.create_refresh_token(
@@ -226,7 +299,9 @@ def finish_login(
         )
     )
     db.commit()
-    active_sessions.pop(username, None)
+
+    # Delete the SRP session only after successful login finalization.
+    _delete_srp_session(username)
 
     return LoginFinishData(
         M2=session.key_proof_hash.decode("ascii"),

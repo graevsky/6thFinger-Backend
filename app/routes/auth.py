@@ -46,8 +46,7 @@ def _get_ready_email_sender() -> SmtpEmailSender:
 @router.get("/params", response_model=RegisterParamsOut, summary="Get SRP parameters")
 def get_srp_params():
     """Return public SRP constants required by the client during auth flow"""
-    constants = auth_service.get_srp_params()
-    return RegisterParamsOut(N=constants["N"], g=constants["g"])
+    return auth_service.get_srp_params()
 
 
 @router.post(
