@@ -37,6 +37,10 @@ RESET_SESSION_TTL_MIN = 15
 def _now_utc() -> datetime.datetime:
     return datetime.datetime.now(datetime.timezone.utc)
 
+def _as_utc(dt_value: datetime.datetime) -> datetime.datetime:
+    if dt_value.tzinfo is None:
+        return dt_value.replace(tzinfo=datetime.timezone.utc)
+    return dt_value.astimezone(datetime.timezone.utc)
 
 def _err(status: int, code: str, detail: str | None = None):
     payload = {"error": code}
@@ -290,7 +294,7 @@ def email_confirm_add(
     if not row:
         _err(400, "NO_PENDING_CODE", "No pending code")
 
-    if row.expires_at < _now_utc():
+    if _as_utc(row.expires_at) < _now_utc():
         _err(400, "CODE_EXPIRED", "Code expired")
 
     if row.attempts >= EMAIL_CODE_MAX_ATTEMPTS:
@@ -391,7 +395,7 @@ def email_confirm_remove(
         )
         if not row:
             _err(400, "NO_PENDING_CODE", "No pending code")
-        if row.expires_at < _now_utc():
+        if _as_utc(row.expires_at) < _now_utc():
             _err(400, "CODE_EXPIRED", "Code expired")
         if row.attempts >= EMAIL_CODE_MAX_ATTEMPTS:
             _err(429, "TOO_MANY_ATTEMPTS", "Too many attempts")
@@ -528,7 +532,7 @@ def password_reset_email_verify(
     )
     if not row:
         _err(400, "NO_PENDING_CODE", "No pending code")
-    if row.expires_at < _now_utc():
+    if _as_utc(row.expires_at) < _now_utc():
         _err(400, "CODE_EXPIRED", "Code expired")
     if row.attempts >= EMAIL_CODE_MAX_ATTEMPTS:
         _err(429, "TOO_MANY_ATTEMPTS", "Too many attempts")
@@ -596,7 +600,7 @@ def password_reset_finish(body: PasswordResetFinishIn, db: Session = Depends(get
     if sess.consumed_at is not None:
         _err(400, "SESSION_ALREADY_USED", "Session already used")
 
-    if sess.expires_at < _now_utc():
+    if _as_utc(sess.expires_at) < _now_utc():
         _err(400, "SESSION_EXPIRED", "Session expired")
 
     u = db.query(User).filter_by(id=sess.user_id).first()
