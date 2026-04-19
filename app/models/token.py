@@ -31,10 +31,10 @@ class Token(Base):
     )
 
     # Current active access token stored as raw bytes
-    access_token = Column(LargeBinary, nullable=False)
+    access_jti_hash = Column(LargeBinary, nullable=True, index=True)
 
     # SHA-256 hash of the refresh token
-    token_hash = Column(LargeBinary, nullable=False)
+    token_hash = Column(LargeBinary, nullable=False, index=True)
 
     # Creation timestamp of the token
     created_at = Column(DateTime(timezone=True), server_default=func.now())

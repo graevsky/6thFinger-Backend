@@ -283,7 +283,7 @@ def finish_login(
     except Exception:
         _err(401, "WRONG_PASSWORD", "Invalid username or password")
 
-    access_token = tokens.create_access_token({"sub": str(user.id)})
+    access_token, access_jti_hash = tokens.create_access_token({"sub": str(user.id)})
     refresh_token, refresh_hash, expire = tokens.create_refresh_token(
         {"sub": str(user.id)}
     )
@@ -292,7 +292,7 @@ def finish_login(
     db.add(
         Token(
             user_id=user.id,
-            access_token=access_token.encode(),
+            access_jti_hash=access_jti_hash,
             token_hash=refresh_hash,
             expires_at=expire,
             last_used_at=now_utc(),
@@ -325,8 +325,8 @@ def refresh_access_token(db: Session, refresh_token_raw: str | None) -> dict[str
     if not db_token:
         _err(401, "TOKEN_REVOKED", "Token revoked or missing")
 
-    new_access = tokens.create_access_token({"sub": payload["sub"]})
-    db_token.access_token = new_access.encode()
+    new_access, new_access_jti_hash = tokens.create_access_token({"sub": payload["sub"]})
+    db_token.access_jti_hash = new_access_jti_hash
     db_token.last_used_at = now_utc()
     db.commit()
 
@@ -733,6 +733,13 @@ def password_reset_finish(
 
     user.srp_salt = new_salt
     user.srp_verifier = new_verifier
+
+    db.query(Token).filter_by(user_id=user.id, revoked_at=None).update(
+        {
+            "revoked_at": now_utc(),
+            "last_used_at": now_utc(),
+        }
+    )
 
     sess.consumed_at = now_utc()
     db.commit()

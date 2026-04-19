@@ -39,3 +39,10 @@ def hash_email_code(purpose: str, code_plain: str, targe_email: str) -> bytes:
     e = targe_email.strip().lower()
     payload = f"email:{p}:{e}:{c}".encode("utf-8")
     return sha256_digest(_CODES_PEPPER.encode("utf-8") + payload)
+
+
+def hash_access_jti(jti: str) -> bytes:
+    """Hash JWT access-token JTI before storing it in DB."""
+    normalized = jti.strip()
+    payload = f"access_jti:{normalized}".encode("utf-8")
+    return sha256_digest(_CODES_PEPPER.encode("utf-8") + payload)

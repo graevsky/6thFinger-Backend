@@ -6,6 +6,7 @@ from app.security import tokens
 from app.db import SessionLocal
 from app.models.user import User
 from app.services.common import now_utc
+from app.security.hashing import hash_access_jti
 
 auth_scheme = HTTPBearer()
 
@@ -41,21 +42,26 @@ def get_current_user(
     token_type = payload.get("typ")
 
     # Refresh token is explicitly rejected on protected routes
-    if token_type == "refresh":
+    if token_type != "access":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token",
         )
 
-    if token_type not in (None, "access"):
+    jti = payload.get("jti")
+    if not jti:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token",
         )
+
+    access_jti_hash = hash_access_jti(jti)
 
     # Access token must be present in storage and still active.
     db_token = (
-        db.query(Token).filter_by(access_token=token.encode(), revoked_at=None).first()
+        db.query(Token)
+        .filter_by(access_jti_hash=access_jti_hash, revoked_at=None)
+        .first()
     )
     if not db_token:
         raise HTTPException(
