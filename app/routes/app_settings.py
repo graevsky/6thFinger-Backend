@@ -7,16 +7,28 @@ from app.services import app_settings_service
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
-DEFAULT_PAYLOAD = app_settings_service.DEFAULT_PAYLOAD
 
-
-@router.get("/", response_model=AppSettingsOut)
+@router.get(
+    "/",
+    response_model=AppSettingsOut,
+    summary="Get app settings",
+)
 def get_settings(user=Depends(get_current_user), db: Session = Depends(get_db)):
+    """Return current user mobile app settings."""
     return app_settings_service.get_settings(db, user.id)
 
 
-@router.put("/", response_model=AppSettingsOut)
+@router.put(
+    "/",
+    response_model=AppSettingsOut,
+    summary="Update app settings",
+)
 def update_settings(
-    data: AppSettingsIn, user=Depends(get_current_user), db: Session = Depends(get_db)
+    data: AppSettingsIn,
+    user=Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
+    """
+    Update current user's application settings.
+    """
     return app_settings_service.update_settings(db, user.id, data.payload)

@@ -1,0 +1,15 @@
+{
+    email {$LETSENCRYPT_EMAIL}
+}
+
+{$APP_DOMAIN} {
+    encode zstd gzip
+
+    header {
+        -Server
+        X-Content-Type-Options nosniff
+        Referrer-Policy no-referrer
+    }
+
+    reverse_proxy backend:8000
+}

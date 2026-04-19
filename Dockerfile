@@ -9,13 +9,19 @@ ENV PIP_NO_CACHE_DIR=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     netcat-openbsd \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+RUN addgroup --system app && adduser --system --ingroup app app
 
+COPY requirements.txt ./
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
 COPY . .
+
+RUN chmod +x /app/docker/*.sh && chown -R app:app /app
+
+USER app
 
 EXPOSE 8000
 

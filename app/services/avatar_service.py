@@ -9,17 +9,23 @@ from app.models.user import User
 from app.services.common import ServiceError
 
 
+# Maximum accepted avatar size.
 MAX_AVATAR_SIZE = 6 * 1024 * 1024  # 6 MB
+
+# Currently supported image types are png, jpeg and webp
 SUPPORTED_CONTENT_TYPES = ("image/png", "image/jpeg", "image/webp")
 
 
 @dataclass(frozen=True)
 class AvatarUploadResult:
+    """Result key returned after successful avatar upload."""
+
     key: str
     content_type: str
 
 
 def ext_for_content_type(ct: str) -> str:
+    """Map MIME type to the object key extension."""
     ct = (ct or "").lower()
     if ct == "image/png":
         return "png"
@@ -35,6 +41,7 @@ def upload_avatar(
     data: bytes,
     content_type: str | None,
 ) -> AvatarUploadResult:
+    """Validate and upload a user avatar to object storage."""
     if not content_type:
         raise ServiceError(status_code=400, detail="Missing file")
 
@@ -80,6 +87,7 @@ def upload_avatar(
 
 
 def get_avatar_stream(user: User, get_minio_client: Callable[[], Any]):
+    """Return avatar content type and streaming object from storage."""
     key = getattr(user, "avatar_key", None)
     if not key:
         raise ServiceError(status_code=404, detail="No avatar found")
@@ -87,9 +95,11 @@ def get_avatar_stream(user: User, get_minio_client: Callable[[], Any]):
     minio_client = get_minio_client()
 
     try:
+        # Try to use stored object metadata for the content type
         stat_obj = minio_client.stat_object(MINIO_BUCKET, key)
         content_type = stat_obj.content_type or "image/jpeg"
     except Exception:
+        # If lookup failed, image sets as jpeg, maybe it ll help.
         content_type = "image/jpeg"
 
     try:
@@ -105,6 +115,7 @@ def delete_avatar(
     user: User,
     get_minio_client: Callable[[], Any],
 ) -> None:
+    """Delete avatar object if present and clear avatar reference id from the user."""
     key = getattr(user, "avatar_key", None)
     if key:
         minio_client = get_minio_client()

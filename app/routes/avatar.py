@@ -10,20 +10,26 @@ from app.services.common import ServiceError
 
 router = APIRouter(prefix="/avatar", tags=["avatar"])
 
-MAX_AVATAR_SIZE = avatar_service.MAX_AVATAR_SIZE
-_ext_for_content_type = avatar_service.ext_for_content_type
 
-
-def _raise_service_error(exc: ServiceError):
+def _raise_service_error(exc: ServiceError) -> None:
+    """Convert service-layer error into FastAPI HTTPException."""
     raise HTTPException(status_code=exc.status_code, detail=exc.detail)
 
 
-@router.post("/", response_model=AvatarOut)
+@router.post(
+    "/",
+    response_model=AvatarOut,
+    summary="Upload avatar",
+)
 async def upload_avatar(
     file: UploadFile = File(...),
     user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """
+    Upload and save user avatar to object storage.
+    Supported formats are defined in the avatar service.
+    """
     data = await file.read()
 
     try:
@@ -40,10 +46,14 @@ async def upload_avatar(
     return AvatarOut(key=result.key, content_type=result.content_type)
 
 
-@router.get("/")
-def get_avatar(
-    user=Depends(get_current_user),
-):
+@router.get(
+    "/",
+    summary="Get avatar",
+)
+def get_avatar(user=Depends(get_current_user)):
+    """
+    Stream current user avatar from object storage.
+    """
     try:
         content_type, response = avatar_service.get_avatar_stream(user, get_minio)
     except ServiceError as exc:
@@ -64,10 +74,15 @@ def get_avatar(
     )
 
 
-@router.delete("/", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete avatar",
+)
 def delete_avatar(
     user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """Delete avatar from storage and clear avatar key in the user profile."""
     avatar_service.delete_avatar(db, user, get_minio)
     return
