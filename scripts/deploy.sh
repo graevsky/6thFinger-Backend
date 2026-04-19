@@ -45,7 +45,6 @@ if ! docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then
 fi
 
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" config >/dev/null
-docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" pull caddy || true
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" build backend migrate
 
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" run --rm migrate
