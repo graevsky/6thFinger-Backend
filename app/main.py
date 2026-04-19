@@ -1,4 +1,5 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, HTTPException
+import ipaddress
 import os
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -14,6 +15,16 @@ Main routes:
 - settings: app-level user preferences
 - avatar: avatar upload, download, and deletion
 """
+
+
+def _is_internal_client(request: Request) -> bool:
+    host = request.client.host if request.client else ""
+    try:
+        ip = ipaddress.ip_address(host)
+        return ip.is_loopback or ip.is_private
+    except ValueError:
+        return host == "localhost"
+
 
 def _env_flag(name: str, default: bool) -> bool:
     raw = os.getenv(name)
@@ -63,5 +74,7 @@ def root():
 
 
 @app.get("/healthz", include_in_schema=False)
-def healthz():
+def healthz(request: Request):
+    if not _is_internal_client(request):
+        raise HTTPException(status_code=404, detail="Not found")
     return {"status": "oki-doki"}
