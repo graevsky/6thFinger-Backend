@@ -64,4 +64,4 @@ def root():
 
 @app.get("/healthz", include_in_schema=False)
 def healthz():
-    return {"status": "ok"}
+    return {"status": "oki-doki"}
