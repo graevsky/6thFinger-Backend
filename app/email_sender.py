@@ -1,5 +1,6 @@
 import os
 import smtplib
+import socket
 from email.message import EmailMessage
 from dotenv import load_dotenv
 
@@ -12,11 +13,40 @@ class EmailNotConfigured(RuntimeError):
     pass
 
 
+class EmailDeliveryError(RuntimeError):
+    pass
+
+
+class IPv4SMTP(smtplib.SMTP):
+    """SMTP client that connects using IPv4 only."""
+
+    def _get_socket(self, host, port, timeout):
+        last_exc = None
+        infos = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)
+
+        for family, socktype, proto, _, sockaddr in infos:
+            sock = socket.socket(family, socktype, proto)
+            sock.settimeout(timeout)
+            try:
+                sock.connect(sockaddr)
+                return sock
+            except OSError as exc:
+                last_exc = exc
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+
+        if last_exc:
+            raise last_exc
+
+        raise OSError(f"Could not connect to {host}:{port} over IPv4")
+
+
 class SmtpEmailSender:
     """Simple SMTP sender used for verification and recovery emails."""
 
     def __init__(self) -> None:
-        # Currently Gmail SMTP is used for ease of setup
         self.host = os.getenv("SMTP_HOST", "smtp.gmail.com")
         self.port = int(os.getenv("SMTP_PORT", "587"))
         self.user = os.getenv("GMAIL_USER")
@@ -43,10 +73,12 @@ class SmtpEmailSender:
         msg["Subject"] = subject
         msg.set_content(body)
 
-        # SMTP FLOW: open SMTP connection, switch to TLS, authenticate, then send the message
-        with smtplib.SMTP(self.host, self.port, timeout=20) as smtp:
-            smtp.ehlo()
-            smtp.starttls()
-            smtp.ehlo()
-            smtp.login(self.user, self.password)
-            smtp.send_message(msg)
+        try:
+            with IPv4SMTP(self.host, self.port, timeout=20) as smtp:
+                smtp.ehlo()
+                smtp.starttls()
+                smtp.ehlo()
+                smtp.login(self.user, self.password)
+                smtp.send_message(msg)
+        except (OSError, smtplib.SMTPException) as exc:
+            raise EmailDeliveryError(f"SMTP delivery failed: {exc}") from exc
