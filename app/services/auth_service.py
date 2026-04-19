@@ -187,6 +187,18 @@ def mask_email(email: str) -> str:
     return f"{first}{'*' * 7}@{domain}"
 
 
+def invalidate_pending_email_codes(
+    db: Session, user_id, purpose: str, email: str
+) -> None:
+    db.query(EmailCode).filter_by(
+        user_id=user_id,
+        purpose=purpose,
+        target_email=email,
+        consumed_at=None,
+    ).update({"consumed_at": now_utc()})
+    db.commit()
+
+
 def get_user_lang(db: Session, user_id) -> str:
     """
     Read user language from app settings.
@@ -325,7 +337,9 @@ def refresh_access_token(db: Session, refresh_token_raw: str | None) -> dict[str
     if not db_token:
         _err(401, "TOKEN_REVOKED", "Token revoked or missing")
 
-    new_access, new_access_jti_hash = tokens.create_access_token({"sub": payload["sub"]})
+    new_access, new_access_jti_hash = tokens.create_access_token(
+        {"sub": payload["sub"]}
+    )
     db_token.access_jti_hash = new_access_jti_hash
     db_token.last_used_at = now_utc()
     db.commit()

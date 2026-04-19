@@ -2,7 +2,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.deps import get_current_user, get_db
-from app.email_sender import EmailNotConfigured, SmtpEmailSender
+from app.email_sender import EmailNotConfigured, EmailDeliveryError, SmtpEmailSender
 from app.schemas.auth import (
     EmailConfirmIn,
     EmailRemoveConfirmIn,
@@ -33,6 +33,13 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 def _email_sender() -> SmtpEmailSender:
     """Create SMTP sender instance for email-based flows"""
     return SmtpEmailSender()
+
+
+def _send_email_or_503(sender: SmtpEmailSender, to_email: str, subject: str, text: str):
+    try:
+        sender.send_text(to_email, subject, text)
+    except EmailDeliveryError as e:
+        _err(503, "EMAIL_SEND_FAILED", str(e))
 
 
 def _err(status: int, code: str, detail: str | None = None):
@@ -253,7 +260,6 @@ def get_me(user=Depends(get_current_user)):
 def email_start_add(
     body: EmailStartAddIn,
     request: Request,
-    bg: BackgroundTasks,
     user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -270,7 +276,12 @@ def email_start_add(
 
     sender = _get_ready_email_sender()
     message = auth_service.issue_email_code_message(db, user.id, "email_add", email)
-    bg.add_task(sender.send_text, message.email, message.subject, message.text)
+
+    try:
+        _send_email_or_503(sender, message.email, message.subject, message.text)
+    except HTTPException:
+        auth_service.invalidate_pending_email_codes(db, user.id, "email_add", email)
+        raise
 
     return GenericOk(detail="code_sent")
 
@@ -304,7 +315,6 @@ def email_confirm_add(
 )
 def email_start_remove(
     request: Request,
-    bg: BackgroundTasks,
     user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -321,7 +331,12 @@ def email_start_remove(
 
     sender = _get_ready_email_sender()
     message = auth_service.issue_email_code_message(db, user.id, "email_remove", email)
-    bg.add_task(sender.send_text, message.email, message.subject, message.text)
+
+    try:
+        _send_email_or_503(sender, message.email, message.subject, message.text)
+    except HTTPException:
+        auth_service.invalidate_pending_email_codes(db, user.id, "email_remove", email)
+        raise
 
     return GenericOk(detail="code_sent")
 
@@ -392,7 +407,6 @@ def password_reset_start(
 def password_reset_email_send(
     body: PasswordResetEmailSendIn,
     request: Request,
-    bg: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     """
@@ -416,7 +430,14 @@ def password_reset_email_send(
         "password_reset",
         email,
     )
-    bg.add_task(sender.send_text, message.email, message.subject, message.text)
+
+    try:
+        _send_email_or_503(sender, message.email, message.subject, message.text)
+    except HTTPException:
+        auth_service.invalidate_pending_email_codes(
+            db, user.id, "password_reset", email
+        )
+        raise
 
     return GenericOk(detail="code_sent")
 
