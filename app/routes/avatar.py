@@ -21,7 +21,7 @@ def _raise_service_error(exc: ServiceError) -> None:
     response_model=AvatarOut,
     summary="Upload avatar",
 )
-async def upload_avatar(
+def upload_avatar(
     file: UploadFile = File(...),
     user=Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -30,7 +30,7 @@ async def upload_avatar(
     Upload and save user avatar to object storage.
     Supported formats are defined in the avatar service.
     """
-    data = await file.read()
+    data = file.file.read(avatar_service.MAX_AVATAR_SIZE + 1)
 
     try:
         result = avatar_service.upload_avatar(
