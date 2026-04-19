@@ -48,7 +48,10 @@ docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" config >/dev/null
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" build backend migrate
 
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" run --rm migrate
-docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d backend caddy
+
+docker rm -f finger_backend_caddy >/dev/null 2>&1 || true
+
+docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d backend
 
 wait_for_healthy "finger_backend_api"
 

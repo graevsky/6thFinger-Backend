@@ -35,30 +35,6 @@ services:
     networks:
       - backend_net
 
-  caddy:
-    image: caddy:2
-    container_name: finger_backend_caddy
-    restart: unless-stopped
-    env_file:
-      - path: ./.env
-        required: false
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      backend:
-        condition: service_healthy
-    networks:
-      - backend_net
-
-volumes:
-  caddy_data:
-  caddy_config:
-
 networks:
   backend_net:
     external: true
