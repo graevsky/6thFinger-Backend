@@ -59,12 +59,14 @@ def _get_ready_email_sender() -> SmtpEmailSender:
     except EmailNotConfigured as e:
         _err(503, "EMAIL_NOT_CONFIGURED", str(e))
 
+
 def _rl_ip(request: Request, scope: str, limit: int, window_sec: int = 60) -> None:
     enforce_rate_limit(
         request=request,
         scope=scope,
         limit=limit,
         window_sec=window_sec,
+        include_ip=True,
     )
 
 
@@ -81,6 +83,7 @@ def _rl_subject(
         limit=limit,
         window_sec=window_sec,
         subject=subject,
+        include_ip=False,
     )
 
 
@@ -219,7 +222,11 @@ def refresh_token(old_refresh: dict, request: Request, db: Session = Depends(get
     response_model=GenericOk,
     summary="Logout current user",
 )
-def logout(request: Request, user=Depends(get_current_user), db: Session = Depends(get_db)):
+def logout(
+    request: Request,
+    user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """
     Revoke all active token records for the current user.
     """
@@ -254,6 +261,8 @@ def email_start_add(
     Start verified email attachment flow.
     Creates a one-time code and sends it to the requested email address.
     """
+    _limit_user_email_flow(request, str(user.id), "auth:email:start_add")
+
     try:
         email = auth_service.prepare_email_add(db, user.id, str(body.email))
     except ServiceError as exc:
@@ -352,7 +361,11 @@ def email_confirm_remove(
     response_model=PasswordResetStartOut,
     summary="Start password reset flow",
 )
-def password_reset_start(body: PasswordResetStartIn, request: Request, db: Session = Depends(get_db)):
+def password_reset_start(
+    body: PasswordResetStartIn,
+    request: Request,
+    db: Session = Depends(get_db),
+):
     """
     Check which password reset methods are available for a user.
     Returns whether verified email and unused recovery codes exist.
@@ -385,9 +398,7 @@ def password_reset_email_send(
     """
     Send one-time password reset code to the verified email.
     """
-    _limit_password_reset_flow(
-        request, body.username, "auth:password_reset:email_send"
-    )
+    _limit_password_reset_flow(request, body.username, "auth:password_reset:email_send")
 
     try:
         user, email = auth_service.prepare_password_reset_email_send(
@@ -479,7 +490,7 @@ def password_reset_recovery_verify(
 def password_reset_finish(
     body: PasswordResetFinishIn,
     request: Request,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     Replace SRP credentials using a valid reset session.

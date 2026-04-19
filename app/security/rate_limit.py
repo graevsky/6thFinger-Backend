@@ -31,8 +31,21 @@ def _normalize_subject(subject: str | None) -> str:
     return subject.strip().lower()
 
 
-def _bucket(scope: str, ip: str, subject: str | None = None) -> str:
-    material = f"{scope}|{ip}|{_normalize_subject(subject)}"
+def _bucket(
+    scope: str,
+    ip: str | None = None,
+    subject: str | None = None,
+) -> str:
+    parts = [scope]
+
+    if ip is not None:
+        parts.append(f"ip:{ip}")
+
+    normalized_subject = _normalize_subject(subject)
+    if normalized_subject:
+        parts.append(f"subject:{normalized_subject}")
+
+    material = "|".join(parts)
     digest = hashlib.sha256(material.encode("utf-8")).hexdigest()
     return f"ratelimit:{scope}:{digest}"
 
@@ -58,6 +71,7 @@ def enforce_rate_limit(
     limit: int,
     window_sec: int,
     subject: str | None = None,
+    include_ip: bool = True,
 ) -> None:
     """Best-effort Redis-backed fixed-window rate limit.
 
@@ -66,7 +80,7 @@ def enforce_rate_limit(
     if not RATE_LIMIT_ENABLED:
         return
 
-    ip = _client_ip(request)
+    ip = _client_ip(request) if include_ip else None
     key = _bucket(scope=scope, ip=ip, subject=subject)
 
     try:
