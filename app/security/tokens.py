@@ -8,8 +8,8 @@ load_dotenv()
 
 SECRET_KEY = os.getenv("JWT_SECRET")  # JWT secret key from environment
 ALGORITHM = "HS256"  # hasing algorithm for JWT
-ACCESS_TOKEN_EXPIRE_MINUTES = 10  # Access token expiration time
-REFRESH_TOKEN_EXPIRE_DAYS = 30  # Refresh token expiration time
+ACCESS_TOKEN_EXPIRE_SECONDS = int(os.getenv("ACCESS_TTL", 600))  # Access token expiration time
+REFRESH_TOKEN_EXPIRE_SECONDS = int(os.getenv("REFRESH_TTL", 2592000))  # Refresh token expiration time
 
 
 def create_access_token(data: dict) -> str:
@@ -20,7 +20,7 @@ def create_access_token(data: dict) -> str:
     - typ: explicit token type
     """
     to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    expire = datetime.now(timezone.utc) + timedelta(seconds=ACCESS_TOKEN_EXPIRE_SECONDS)
     to_encode.update({"exp": expire, "typ": "access"})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
@@ -30,7 +30,7 @@ def create_refresh_token(data: dict) -> tuple[str, bytes, datetime]:
 
     The plain refresh token is returned to the client, while only its SHA-256 hash stored.
     """
-    expire = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    expire = datetime.now(timezone.utc) + timedelta(seconds=REFRESH_TOKEN_EXPIRE_SECONDS)
     to_encode = data.copy()
     to_encode.update({"exp": expire, "typ": "refresh"})
     token = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
