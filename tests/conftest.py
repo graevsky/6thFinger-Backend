@@ -1,15 +1,19 @@
+import time
+
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app import redis_client
 from app.db import Base
 from app.deps import get_current_user, get_db as deps_get_db
 from app.main import app
+from app.security import rate_limit
 from app.services import auth_service
 from tests.factories import create_user
-from tests.mocks import FakeEmailSender
+from tests.mocks import FakeEmailSender, FakeRedis
 
 TEST_DATABASE_URL = "sqlite://"
 
@@ -28,17 +32,30 @@ TestingSessionLocal = sessionmaker(
 
 @pytest.fixture(scope="session", autouse=True)
 def prepare_database():
+    Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     yield
     Base.metadata.drop_all(bind=engine)
 
 
+@pytest.fixture()
+def fake_redis(monkeypatch):
+    original_get_redis = redis_client.get_redis
+    fake_redis = FakeRedis()
+    original_get_redis.cache_clear()
+    monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
+    monkeypatch.setattr(auth_service, "get_redis", lambda: fake_redis)
+    monkeypatch.setattr(rate_limit, "get_redis", lambda: fake_redis)
+    monkeypatch.setattr(rate_limit, "RATE_LIMIT_ENABLED", False)
+    yield fake_redis
+    fake_redis.clear()
+    original_get_redis.cache_clear()
+
+
 @pytest.fixture(autouse=True)
-def clear_runtime_state():
-    auth_service.active_sessions.clear()
+def clear_runtime_state(fake_redis):
     app.dependency_overrides.clear()
     yield
-    auth_service.active_sessions.clear()
     app.dependency_overrides.clear()
 
 
@@ -47,10 +64,18 @@ def db_session():
     connection = engine.connect()
     transaction = connection.begin()
     session = TestingSessionLocal(bind=connection)
+    nested = connection.begin_nested()
+
+    @event.listens_for(session, "after_transaction_end")
+    def restart_savepoint(sess, trans):
+        nonlocal nested
+        if not nested.is_active and connection.in_transaction():
+            nested = connection.begin_nested()
 
     try:
         yield session
     finally:
+        event.remove(session, "after_transaction_end", restart_savepoint)
         session.close()
         transaction.rollback()
         connection.close()
@@ -63,7 +88,7 @@ def client(db_session):
 
     app.dependency_overrides[deps_get_db] = override_get_db
 
-    with TestClient(app) as test_client:
+    with TestClient(app, base_url="http://localhost") as test_client:
         yield test_client
 
 
