@@ -6,8 +6,20 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def is_email_enabled() -> bool:
+    """Return whether email flows are globally enabled."""
+    raw = os.getenv("EMAIL_ENABLED", "true")
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+class EmailDisabledError(RuntimeError):
+    """Raised when email flows are disabled by configuration."""
+
+    pass
+
+
 class EmailNotConfigured(RuntimeError):
-    """Raised when email sending is disabled or required SMTP settings are missing. Not used for now"""
+    """Raised when email sending is enabled but Resend settings are missing."""
 
     pass
 
@@ -17,17 +29,17 @@ class EmailDeliveryError(RuntimeError):
 
 
 class SmtpEmailSender:
-    """Simple SMTP sender used for verification and recovery emails."""
+    """Simple Resend sender used for verification and recovery emails."""
 
     def __init__(self) -> None:
-        self.enabled = os.getenv("EMAIL_ENABLED", "true").lower() == "true"
+        self.enabled = is_email_enabled()
         self.api_key = os.getenv("RESEND_API_KEY")
         self.from_email = os.getenv("EMAIL_FROM", "")
 
     def ensure_ready(self) -> None:
         """Validate that email sending is enabled and Resend settings are present."""
         if not self.enabled:
-            raise EmailNotConfigured("Email sending disabled (EMAIL_ENABLED=false)")
+            raise EmailDisabledError("Email sending disabled (EMAIL_ENABLED=false)")
 
         if not self.api_key:
             raise EmailNotConfigured("Email not configured. Set RESEND_API_KEY.")
