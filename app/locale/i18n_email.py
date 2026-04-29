@@ -12,8 +12,8 @@ _EMAIL_TEMPLATES = {
         "greeting_generic": "Добрый день!",
         "signoff": "С уважением,",
         "team": "команда Prothesis.ru",
-        "landing_label": "На лендинг Prothesis.ru",
-        "guide_label": "На гайд Руководство",
+        "landing_label": "Prothesis.ru",
+        "guide_label": "Руководство",
         "email_add": {
             "subject": "Подтверждение почты",
             "code_label": "Код подтверждения",
@@ -38,7 +38,7 @@ _EMAIL_TEMPLATES = {
         "greeting_generic": "Good day!",
         "signoff": "Best regards,",
         "team": "The Prothesis.ru team",
-        "landing_label": "Visit Prothesis.ru",
+        "landing_label": "Prothesis.ru",
         "guide_label": "Open the guide",
         "email_add": {
             "subject": "Email verification",
