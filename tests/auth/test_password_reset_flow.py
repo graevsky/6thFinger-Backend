@@ -12,6 +12,8 @@ from tests.factories import (
     create_recovery_code,
 )
 
+EMAIL_DISABLED_DETAIL = "Email sending disabled (EMAIL_ENABLED=false)"
+
 
 def test_password_reset_start_returns_404_when_user_not_found(client):
     response = client.post(
@@ -47,6 +49,33 @@ def test_password_reset_start_returns_masked_email_when_verified_email_exists(
     assert response.json() == {
         "has_email": True,
         "email": "j*******@example.com",
+        "has_recovery": True,
+    }
+
+
+def test_password_reset_start_hides_email_when_email_disabled(
+    client,
+    db_session,
+    user_factory,
+    monkeypatch,
+):
+    user = user_factory(
+        username="john_doe", email="john_doe@example.com", verified=True
+    )
+    create_recovery_code(
+        db_session, user_id=user.id, plain_code="ABCD-EFGH-IJKL", used=False
+    )
+    monkeypatch.setenv("EMAIL_ENABLED", "false")
+
+    response = client.post(
+        "/auth/password-reset/start",
+        json={"username": "john_doe"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "has_email": False,
+        "email": None,
         "has_recovery": True,
     }
 
@@ -147,6 +176,40 @@ def test_password_reset_email_send_returns_429_when_cooldown_is_active(
 
     assert data["detail"]["error"] == "TOO_MANY_REQUESTS"
     assert data["detail"]["detail"] == "Too many requests. Try later."
+
+
+def test_password_reset_email_send_returns_503_when_email_disabled(
+    client,
+    db_session,
+    user_factory,
+    monkeypatch,
+):
+    user = user_factory(
+        username="john_doe", email="john_doe@example.com", verified=True
+    )
+    monkeypatch.setenv("EMAIL_ENABLED", "false")
+
+    response = client.post(
+        "/auth/password-reset/email/send",
+        json={"username": "john_doe", "email": "john_doe@example.com"},
+    )
+
+    assert response.status_code == 503
+    data = response.json()
+
+    assert data["detail"]["error"] == "EMAIL_DISABLED"
+    assert data["detail"]["detail"] == EMAIL_DISABLED_DETAIL
+
+    rows = (
+        db_session.query(EmailCode)
+        .filter_by(
+            user_id=user.id,
+            purpose="password_reset",
+            target_email="john_doe@example.com",
+        )
+        .all()
+    )
+    assert len(rows) == 0
 
 
 def test_password_reset_email_send_returns_503_when_sender_not_configured(
@@ -307,6 +370,47 @@ def test_password_reset_email_verify_returns_400_when_no_pending_code(
 
     assert data["detail"]["error"] == "NO_PENDING_CODE"
     assert data["detail"]["detail"] == "No pending code"
+
+
+def test_password_reset_email_verify_returns_503_when_email_disabled(
+    client,
+    db_session,
+    user_factory,
+    monkeypatch,
+):
+    user = user_factory(
+        username="john_doe", email="john_doe@example.com", verified=True
+    )
+    row, code = create_email_code(
+        db_session,
+        user_id=user.id,
+        purpose="password_reset",
+        target_email="john_doe@example.com",
+        plain_code="123456",
+        consumed=False,
+    )
+    monkeypatch.setenv("EMAIL_ENABLED", "false")
+
+    response = client.post(
+        "/auth/password-reset/email/verify",
+        json={
+            "username": "john_doe",
+            "email": "john_doe@example.com",
+            "code": code,
+        },
+    )
+
+    assert response.status_code == 503
+    data = response.json()
+
+    assert data["detail"]["error"] == "EMAIL_DISABLED"
+    assert data["detail"]["detail"] == EMAIL_DISABLED_DETAIL
+
+    db_session.refresh(row)
+    sessions = db_session.query(PasswordResetSession).filter_by(user_id=user.id).all()
+    assert row.consumed_at is None
+    assert row.attempts == 0
+    assert len(sessions) == 0
 
 
 def test_password_reset_email_verify_returns_400_when_code_expired(

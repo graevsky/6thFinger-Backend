@@ -6,6 +6,8 @@ from app.models.recovery_code import RecoveryCode
 from app.models.user import User
 from tests.factories import create_app_settings, create_email_code, create_recovery_code
 
+EMAIL_DISABLED_DETAIL = "Email sending disabled (EMAIL_ENABLED=false)"
+
 
 def test_email_start_add_success_creates_new_code_consumes_old_and_uses_fake_sender(
     client,
@@ -112,6 +114,40 @@ def test_email_start_add_returns_429_when_cooldown_is_active(
     assert data["detail"]["detail"] == "Too many requests. Try later."
 
 
+def test_email_start_add_returns_503_when_email_disabled(
+    client,
+    db_session,
+    user_factory,
+    auth_as,
+    monkeypatch,
+):
+    user = user_factory(username="john_doe")
+    auth_as(user)
+    monkeypatch.setenv("EMAIL_ENABLED", "false")
+
+    response = client.post(
+        "/auth/email/start-add",
+        json={"email": "john_doe@example.com"},
+    )
+
+    assert response.status_code == 503
+    data = response.json()
+
+    assert data["detail"]["error"] == "EMAIL_DISABLED"
+    assert data["detail"]["detail"] == EMAIL_DISABLED_DETAIL
+
+    rows = (
+        db_session.query(EmailCode)
+        .filter_by(
+            user_id=user.id,
+            purpose="email_add",
+            target_email="john_doe@example.com",
+        )
+        .all()
+    )
+    assert len(rows) == 0
+
+
 def test_email_start_add_returns_503_when_email_sender_not_configured(
     client,
     db_session,
@@ -203,6 +239,44 @@ def test_email_confirm_add_returns_400_when_no_pending_code(
 
     assert data["detail"]["error"] == "NO_PENDING_CODE"
     assert data["detail"]["detail"] == "No pending code"
+
+
+def test_email_confirm_add_returns_503_when_email_disabled(
+    client,
+    db_session,
+    user_factory,
+    auth_as,
+    monkeypatch,
+):
+    user = user_factory(username="john_doe")
+    auth_as(user)
+    row, code = create_email_code(
+        db_session,
+        user_id=user.id,
+        purpose="email_add",
+        target_email="john_doe@example.com",
+        plain_code="123456",
+        consumed=False,
+    )
+    monkeypatch.setenv("EMAIL_ENABLED", "false")
+
+    response = client.post(
+        "/auth/email/confirm-add",
+        json={"email": "john_doe@example.com", "code": code},
+    )
+
+    assert response.status_code == 503
+    data = response.json()
+
+    assert data["detail"]["error"] == "EMAIL_DISABLED"
+    assert data["detail"]["detail"] == EMAIL_DISABLED_DETAIL
+
+    db_session.refresh(row)
+    updated_user = db_session.query(User).filter_by(id=user.id).first()
+    assert row.consumed_at is None
+    assert row.attempts == 0
+    assert updated_user.email is None
+    assert updated_user.email_verified_at is None
 
 
 def test_email_confirm_add_returns_400_when_code_expired(
@@ -422,6 +496,41 @@ def test_email_start_remove_returns_429_when_cooldown_is_active(
     assert data["detail"]["detail"] == "Too many requests. Try later."
 
 
+def test_email_start_remove_returns_503_when_email_disabled(
+    client,
+    db_session,
+    user_factory,
+    auth_as,
+    monkeypatch,
+):
+    user = user_factory(
+        username="john_doe",
+        email="john_doe@example.com",
+        verified=True,
+    )
+    auth_as(user)
+    monkeypatch.setenv("EMAIL_ENABLED", "false")
+
+    response = client.post("/auth/email/start-remove")
+
+    assert response.status_code == 503
+    data = response.json()
+
+    assert data["detail"]["error"] == "EMAIL_DISABLED"
+    assert data["detail"]["detail"] == EMAIL_DISABLED_DETAIL
+
+    rows = (
+        db_session.query(EmailCode)
+        .filter_by(
+            user_id=user.id,
+            purpose="email_remove",
+            target_email="john_doe@example.com",
+        )
+        .all()
+    )
+    assert len(rows) == 0
+
+
 def test_email_start_remove_returns_503_when_sender_not_configured(
     client,
     db_session,
@@ -522,6 +631,48 @@ def test_email_confirm_remove_by_code_returns_400_when_no_pending_code(
 
     assert data["detail"]["error"] == "NO_PENDING_CODE"
     assert data["detail"]["detail"] == "No pending code"
+
+
+def test_email_confirm_remove_returns_503_when_email_disabled(
+    client,
+    db_session,
+    user_factory,
+    auth_as,
+    monkeypatch,
+):
+    user = user_factory(
+        username="john_doe",
+        email="john_doe@example.com",
+        verified=True,
+    )
+    auth_as(user)
+    row, code = create_email_code(
+        db_session,
+        user_id=user.id,
+        purpose="email_remove",
+        target_email="john_doe@example.com",
+        plain_code="123456",
+        consumed=False,
+    )
+    monkeypatch.setenv("EMAIL_ENABLED", "false")
+
+    response = client.post(
+        "/auth/email/confirm-remove",
+        json={"code": code},
+    )
+
+    assert response.status_code == 503
+    data = response.json()
+
+    assert data["detail"]["error"] == "EMAIL_DISABLED"
+    assert data["detail"]["detail"] == EMAIL_DISABLED_DETAIL
+
+    db_session.refresh(row)
+    updated_user = db_session.query(User).filter_by(id=user.id).first()
+    assert row.consumed_at is None
+    assert row.attempts == 0
+    assert updated_user.email == "john_doe@example.com"
+    assert updated_user.email_verified_at is not None
 
 
 def test_email_confirm_remove_by_code_returns_400_when_expired(
