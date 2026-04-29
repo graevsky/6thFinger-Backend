@@ -286,7 +286,16 @@ def test_password_reset_email_send_success_creates_code_and_uses_fake_sender(
     sent = fake_email_sender.sent[0]
     assert sent["email"] == "john_doe@example.com"
     assert sent["subject"] == "Восстановление пароля"
+    assert "Добрый день, john_doe!" in sent["text"]
+    assert "Добрый день, john_doe!" in sent["html"]
+    assert "Код восстановления: " in sent["text"]
     assert "Срок действия: 10 минут." in sent["text"]
+    assert "С уважением,\nкоманда Prothesis.ru" in sent["text"]
+    assert "На лендинг Prothesis.ru: https://prothesis.ru" in sent["text"]
+    assert "На гайд Руководство: https://google.com" in sent["text"]
+    assert 'href="https://prothesis.ru"' in sent["html"]
+    assert 'href="https://google.com"' in sent["html"]
+    assert "Добрый день, john_doe!" in sent["html"]
 
 
 def test_password_reset_email_verify_returns_404_when_user_not_found(client):

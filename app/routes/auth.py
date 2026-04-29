@@ -41,9 +41,15 @@ def _email_sender() -> SmtpEmailSender:
     return SmtpEmailSender()
 
 
-def _send_email_or_503(sender: SmtpEmailSender, to_email: str, subject: str, text: str):
+def _send_email_or_503(
+    sender: SmtpEmailSender,
+    to_email: str,
+    subject: str,
+    text: str,
+    html: str,
+):
     try:
-        sender.send_text(to_email, subject, text)
+        sender.send_text(to_email, subject, text, html)
     except EmailDisabledError as e:
         _err(503, "EMAIL_DISABLED", str(e))
     except EmailNotConfigured as e:
@@ -294,10 +300,19 @@ def email_start_add(
         _raise_service_error(exc)
 
     sender = _get_ready_email_sender()
-    message = auth_service.issue_email_code_message(db, user.id, "email_add", email)
+    try:
+        message = auth_service.issue_email_code_message(db, user.id, "email_add", email)
+    except ServiceError as exc:
+        _raise_service_error(exc)
 
     try:
-        _send_email_or_503(sender, message.email, message.subject, message.text)
+        _send_email_or_503(
+            sender,
+            message.email,
+            message.subject,
+            message.text,
+            message.html,
+        )
     except HTTPException:
         auth_service.invalidate_pending_email_codes(db, user.id, "email_add", email)
         raise
@@ -351,10 +366,21 @@ def email_start_remove(
         _raise_service_error(exc)
 
     sender = _get_ready_email_sender()
-    message = auth_service.issue_email_code_message(db, user.id, "email_remove", email)
+    try:
+        message = auth_service.issue_email_code_message(
+            db, user.id, "email_remove", email
+        )
+    except ServiceError as exc:
+        _raise_service_error(exc)
 
     try:
-        _send_email_or_503(sender, message.email, message.subject, message.text)
+        _send_email_or_503(
+            sender,
+            message.email,
+            message.subject,
+            message.text,
+            message.html,
+        )
     except HTTPException:
         auth_service.invalidate_pending_email_codes(db, user.id, "email_remove", email)
         raise
@@ -448,15 +474,24 @@ def password_reset_email_send(
         _raise_service_error(exc)
 
     sender = _get_ready_email_sender()
-    message = auth_service.issue_email_code_message(
-        db,
-        user.id,
-        "password_reset",
-        email,
-    )
+    try:
+        message = auth_service.issue_email_code_message(
+            db,
+            user.id,
+            "password_reset",
+            email,
+        )
+    except ServiceError as exc:
+        _raise_service_error(exc)
 
     try:
-        _send_email_or_503(sender, message.email, message.subject, message.text)
+        _send_email_or_503(
+            sender,
+            message.email,
+            message.subject,
+            message.text,
+            message.html,
+        )
     except HTTPException:
         auth_service.invalidate_pending_email_codes(
             db, user.id, "password_reset", email

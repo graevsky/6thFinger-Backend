@@ -8,12 +8,19 @@ class FakeEmailSender:
     def ensure_ready(self):
         return None
 
-    def send_text(self, email: str, subject: str, text: str):
+    def send_text(
+        self,
+        email: str,
+        subject: str,
+        text: str,
+        html: str | None = None,
+    ):
         self.sent.append(
             {
                 "email": email,
                 "subject": subject,
                 "text": text,
+                "html": html,
             }
         )
 
