@@ -11,6 +11,7 @@ class FakeStartServerSession:
         self.ctx = ctx
         self.verifier_hex = verifier_hex
         self.public = "fake-server-public-B"
+        self.private = "fake-private-session"
 
 
 class FakeSuccessfulLoginSession:
@@ -41,8 +42,13 @@ class FakeExplodingSession:
         return True
 
 
+def _store_fake_srp_session(fake_redis, username, private="fake-private-session"):
+    fake_redis.set(auth_service._srp_session_key(username), private)
+
+
 def test_login_start_success_returns_srp_data_and_stores_active_session(
     client,
+    fake_redis,
     user_factory,
     monkeypatch,
 ):
@@ -67,9 +73,10 @@ def test_login_start_success_returns_srp_data_and_stores_active_session(
     assert "N" in data
     assert "g" in data
 
-    assert "john_doe" in auth_service.active_sessions
-    assert isinstance(auth_service.active_sessions["john_doe"], FakeStartServerSession)
-    assert auth_service.active_sessions["john_doe"].verifier_hex == "abcd1234"
+    assert (
+        fake_redis.get(auth_service._srp_session_key("john_doe"))
+        == "fake-private-session"
+    )
 
 
 def test_login_start_user_not_found_returns_404(client):
@@ -88,19 +95,25 @@ def test_login_start_user_not_found_returns_404(client):
 def test_login_finish_success_returns_tokens_and_persists_refresh_hash(
     client,
     db_session,
+    fake_redis,
     user_factory,
     monkeypatch,
 ):
     user = user_factory(username="john_doe")
     fake_session = FakeSuccessfulLoginSession()
-    auth_service.active_sessions["john_doe"] = fake_session
+    _store_fake_srp_session(fake_redis, "john_doe")
 
     fake_expire = dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=30)
 
     monkeypatch.setattr(
+        auth_service,
+        "_restore_srp_session",
+        lambda username, verifier_hex, session_private: fake_session,
+    )
+    monkeypatch.setattr(
         auth_service.tokens,
         "create_access_token",
-        lambda payload: "access-token-123",
+        lambda payload: ("access-token-123", b"access-jti-hash-123"),
     )
     monkeypatch.setattr(
         auth_service.tokens,
@@ -127,14 +140,14 @@ def test_login_finish_success_returns_tokens_and_persists_refresh_hash(
 
     token_row = db_session.query(Token).filter_by(user_id=user.id).first()
     assert token_row is not None
-    assert token_row.access_token == b"access-token-123"
+    assert token_row.access_jti_hash == b"access-jti-hash-123"
     assert token_row.token_hash == b"refresh-hash-456"
     assert token_row.expires_at is not None
     assert token_row.expires_at.replace(tzinfo=dt.timezone.utc) == fake_expire
     assert token_row.last_used_at is not None
 
     assert fake_session.process_called_with == ("client-public-A", "0abc")
-    assert "john_doe" not in auth_service.active_sessions
+    assert fake_redis.get(auth_service._srp_session_key("john_doe")) is None
 
 
 def test_login_finish_returns_400_when_no_active_session(client):
@@ -155,9 +168,19 @@ def test_login_finish_returns_400_when_no_active_session(client):
     assert data["detail"]["detail"] == "No active session"
 
 
-def test_login_finish_returns_401_when_proof_is_wrong(client, user_factory):
+def test_login_finish_returns_401_when_proof_is_wrong(
+    client,
+    fake_redis,
+    user_factory,
+    monkeypatch,
+):
     user_factory(username="john_doe")
-    auth_service.active_sessions["john_doe"] = FakeWrongPasswordSession()
+    _store_fake_srp_session(fake_redis, "john_doe")
+    monkeypatch.setattr(
+        auth_service,
+        "_restore_srp_session",
+        lambda username, verifier_hex, session_private: FakeWrongPasswordSession(),
+    )
 
     response = client.post(
         "/auth/login/finish",
@@ -176,9 +199,19 @@ def test_login_finish_returns_401_when_proof_is_wrong(client, user_factory):
     assert data["detail"]["detail"] == "Invalid username or password"
 
 
-def test_login_finish_returns_401_when_session_process_raises(client, user_factory):
+def test_login_finish_returns_401_when_session_process_raises(
+    client,
+    fake_redis,
+    user_factory,
+    monkeypatch,
+):
     user_factory(username="john_doe")
-    auth_service.active_sessions["john_doe"] = FakeExplodingSession()
+    _store_fake_srp_session(fake_redis, "john_doe")
+    monkeypatch.setattr(
+        auth_service,
+        "_restore_srp_session",
+        lambda username, verifier_hex, session_private: FakeExplodingSession(),
+    )
 
     response = client.post(
         "/auth/login/finish",
@@ -197,8 +230,11 @@ def test_login_finish_returns_401_when_session_process_raises(client, user_facto
     assert data["detail"]["detail"] == "Invalid username or password"
 
 
-def test_login_finish_returns_404_when_user_not_found_after_session_exists(client):
-    auth_service.active_sessions["ghost"] = FakeSuccessfulLoginSession()
+def test_login_finish_returns_404_when_user_not_found_after_session_exists(
+    client,
+    fake_redis,
+):
+    _store_fake_srp_session(fake_redis, "ghost")
 
     response = client.post(
         "/auth/login/finish",
@@ -312,7 +348,7 @@ def test_refresh_success_returns_new_access_token_and_updates_db_row(
     monkeypatch.setattr(
         auth_service.tokens,
         "create_access_token",
-        lambda payload: "new-access-token",
+        lambda payload: ("new-access-token", b"new-access-jti-hash"),
     )
 
     response = client.post(
@@ -324,7 +360,7 @@ def test_refresh_success_returns_new_access_token_and_updates_db_row(
     assert response.json() == {"access_token": "new-access-token"}
 
     db_session.refresh(token_row)
-    assert token_row.access_token == b"new-access-token"
+    assert token_row.access_jti_hash == b"new-access-jti-hash"
     assert token_row.last_used_at is not None
 
 

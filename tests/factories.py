@@ -9,7 +9,7 @@ from app.models.password_reset_session import PasswordResetSession
 from app.models.recovery_code import RecoveryCode
 from app.models.token import Token
 from app.models.user import User
-from app.security.hashing import hash_email_code, hash_recovery_code
+from app.security.hashing import hash_email_code, hash_recovery_code, hash_access_jti
 
 
 def now_utc() -> dt.datetime:
@@ -113,7 +113,7 @@ def create_password_reset_session(
 def create_token(
     db,
     user_id,
-    access_token: str = "test-access-token",
+    access_token: str = "test-access-jti",
     refresh_token: str = "test-refresh-token",
     expires_at: dt.datetime | None = None,
     revoked: bool = False,
@@ -121,7 +121,7 @@ def create_token(
     token_hash = hashlib.sha256(refresh_token.encode()).digest()
     row = Token(
         user_id=user_id,
-        access_token=access_token.encode(),
+        access_jti_hash=hash_access_jti(access_token),
         token_hash=token_hash,
         expires_at=expires_at or (now_utc() + dt.timedelta(days=7)),
         revoked_at=now_utc() if revoked else None,
