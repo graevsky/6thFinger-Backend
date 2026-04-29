@@ -59,6 +59,12 @@ def clear_runtime_state(fake_redis):
     app.dependency_overrides.clear()
 
 
+@pytest.fixture(autouse=True)
+def email_link_env(monkeypatch):
+    monkeypatch.setenv("EMAIL_LANDING_URL", "https://prothesis.ru")
+    monkeypatch.setenv("EMAIL_GUIDE_URL", "https://google.com")
+
+
 @pytest.fixture()
 def db_session():
     connection = engine.connect()

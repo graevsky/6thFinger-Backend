@@ -44,6 +44,7 @@ class EmailMessageData:
     email: str
     subject: str
     text: str
+    html: str
 
 
 @dataclass(frozen=True)
@@ -420,9 +421,14 @@ def _consume_pending_codes(db: Session, user_id, purpose: str, email: str) -> No
     ).update({"consumed_at": now_utc()})
 
 
-def _create_email_code(db: Session, user_id, purpose: str, email: str) -> str:
-    """Create and persist a new email code."""
-    code_plain = generate_email_code()
+def _create_email_code(
+    db: Session,
+    user_id,
+    purpose: str,
+    email: str,
+    code_plain: str,
+) -> None:
+    """Persist a prepared email code."""
     expires = now_utc() + datetime.timedelta(minutes=EMAIL_CODE_TTL_MIN)
 
     row = EmailCode(
@@ -435,7 +441,6 @@ def _create_email_code(db: Session, user_id, purpose: str, email: str) -> str:
     )
     db.add(row)
     db.commit()
-    return code_plain
 
 
 def _build_email_message(
@@ -443,11 +448,22 @@ def _build_email_message(
 ) -> EmailMessageData:
     """Build localized email subject and text for the given purpose."""
     lang = get_user_lang(db, user_id)
-    subject, text = build_email(lang, purpose, code_plain, EMAIL_CODE_TTL_MIN)
+    user = _get_user_by_id_or_404(db, user_id)
+    try:
+        subject, text, html = build_email(
+            lang,
+            purpose,
+            code_plain,
+            EMAIL_CODE_TTL_MIN,
+            username=user.username,
+        )
+    except ValueError as exc:
+        _err(503, "EMAIL_NOT_CONFIGURED", str(exc))
     return EmailMessageData(
         email=email,
         subject=subject,
         text=text,
+        html=html,
     )
 
 
@@ -552,10 +568,12 @@ def issue_email_code_message(
     purpose: str,
     email: str,
 ) -> EmailMessageData:
-    """Invalidate previous codes, create a fresh one, and build the email message."""
+    """Invalidate previous codes, build a fresh message, and persist its code."""
     _consume_pending_codes(db, user_id, purpose, email)
-    code_plain = _create_email_code(db, user_id, purpose, email)
-    return _build_email_message(db, user_id, purpose, email, code_plain)
+    code_plain = generate_email_code()
+    message = _build_email_message(db, user_id, purpose, email, code_plain)
+    _create_email_code(db, user_id, purpose, email, code_plain)
+    return message
 
 
 def start_add_email(db: Session, user_id, email_raw: str) -> EmailMessageData:

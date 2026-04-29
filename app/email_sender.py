@@ -47,17 +47,22 @@ class SmtpEmailSender:
         if not self.from_email:
             raise EmailNotConfigured("Email not configured. Set EMAIL_FROM.")
 
-    def send_text(self, to_email: str, subject: str, body: str) -> None:
+    def send_text(
+        self, to_email: str, subject: str, body: str, html_body: str | None = None
+    ) -> None:
         """Send a plain-text email via Resend."""
         self.ensure_ready()
 
         resend.api_key = self.api_key
 
-        html_body = f"""
+        rendered_html = (
+            html_body
+            or f"""
             <div style="font-family: Arial, sans-serif; line-height: 1.5;">
                 <pre style="white-space: pre-wrap; font-family: Arial, sans-serif;">{escape(body)}</pre>
             </div>
-            """
+            """.strip()
+        )
 
         try:
             resend.Emails.send(
@@ -66,7 +71,7 @@ class SmtpEmailSender:
                     "to": [to_email],
                     "subject": subject,
                     "text": body,
-                    "html": html_body,
+                    "html": rendered_html,
                 }
             )
         except Exception as exc:

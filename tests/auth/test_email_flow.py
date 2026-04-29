@@ -60,7 +60,16 @@ def test_email_start_add_success_creates_new_code_consumes_old_and_uses_fake_sen
     sent = fake_email_sender.sent[0]
     assert sent["email"] == "john_doe@example.com"
     assert sent["subject"] == "Подтверждение почты"
+    assert "Добрый день, john_doe!" in sent["text"]
+    assert "Добрый день, john_doe!" in sent["html"]
+    assert "Код подтверждения: " in sent["text"]
     assert "Срок действия: 10 минут." in sent["text"]
+    assert "С уважением,\nкоманда Prothesis.ru" in sent["text"]
+    assert "На лендинг Prothesis.ru: https://prothesis.ru" in sent["text"]
+    assert "На гайд Руководство: https://google.com" in sent["text"]
+    assert 'href="https://prothesis.ru"' in sent["html"]
+    assert 'href="https://google.com"' in sent["html"]
+    assert "Добрый день, john_doe!" in sent["html"]
 
 
 def test_email_start_add_returns_409_when_email_is_used_by_another_user(
@@ -173,6 +182,40 @@ def test_email_start_add_returns_503_when_email_sender_not_configured(
 
     assert data["detail"]["error"] == "EMAIL_NOT_CONFIGURED"
     assert data["detail"]["detail"] == "smtp is disabled in tests"
+
+    rows = (
+        db_session.query(EmailCode)
+        .filter_by(
+            user_id=user.id,
+            purpose="email_add",
+            target_email="john_doe@example.com",
+        )
+        .all()
+    )
+    assert len(rows) == 0
+
+
+def test_email_start_add_returns_503_when_email_footer_links_are_not_configured(
+    client,
+    db_session,
+    user_factory,
+    auth_as,
+    monkeypatch,
+):
+    user = user_factory(username="john_doe")
+    auth_as(user)
+    monkeypatch.delenv("EMAIL_LANDING_URL", raising=False)
+
+    response = client.post(
+        "/auth/email/start-add",
+        json={"email": "john_doe@example.com"},
+    )
+
+    assert response.status_code == 503
+    data = response.json()
+
+    assert data["detail"]["error"] == "EMAIL_NOT_CONFIGURED"
+    assert data["detail"]["detail"] == "Email not configured. Set EMAIL_LANDING_URL."
 
     rows = (
         db_session.query(EmailCode)
@@ -445,7 +488,16 @@ def test_email_start_remove_success_creates_code_and_sends_message(
     sent = fake_email_sender.sent[0]
     assert sent["email"] == "john_doe@example.com"
     assert sent["subject"] == "Remove email from account"
+    assert "Good day, john_doe!" in sent["text"]
+    assert "Good day, john_doe!" in sent["html"]
+    assert "Your email removal code: " in sent["text"]
     assert "Expires in: 10 minutes." in sent["text"]
+    assert "Best regards,\nThe Prothesis.ru team" in sent["text"]
+    assert "Visit Prothesis.ru: https://prothesis.ru" in sent["text"]
+    assert "Open the guide: https://google.com" in sent["text"]
+    assert 'href="https://prothesis.ru"' in sent["html"]
+    assert 'href="https://google.com"' in sent["html"]
+    assert "Good day, john_doe!" in sent["html"]
 
 
 def test_email_start_remove_returns_400_when_no_verified_email(
