@@ -2,7 +2,13 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.deps import get_current_user, get_db
-from app.email_sender import EmailNotConfigured, EmailDeliveryError, SmtpEmailSender
+from app.email_sender import (
+    EmailDeliveryError,
+    EmailDisabledError,
+    EmailNotConfigured,
+    SmtpEmailSender,
+    is_email_enabled,
+)
 from app.schemas.auth import (
     EmailConfirmIn,
     EmailRemoveConfirmIn,
@@ -38,6 +44,10 @@ def _email_sender() -> SmtpEmailSender:
 def _send_email_or_503(sender: SmtpEmailSender, to_email: str, subject: str, text: str):
     try:
         sender.send_text(to_email, subject, text)
+    except EmailDisabledError as e:
+        _err(503, "EMAIL_DISABLED", str(e))
+    except EmailNotConfigured as e:
+        _err(503, "EMAIL_NOT_CONFIGURED", str(e))
     except EmailDeliveryError as e:
         _err(503, "EMAIL_SEND_FAILED", str(e))
 
@@ -63,8 +73,16 @@ def _get_ready_email_sender() -> SmtpEmailSender:
         sender = _email_sender()
         sender.ensure_ready()
         return sender
+    except EmailDisabledError as e:
+        _err(503, "EMAIL_DISABLED", str(e))
     except EmailNotConfigured as e:
         _err(503, "EMAIL_NOT_CONFIGURED", str(e))
+
+
+def _require_email_enabled() -> None:
+    """Fail fast for email-specific endpoints when the feature is disabled."""
+    if not is_email_enabled():
+        _err(503, "EMAIL_DISABLED", "Email sending disabled (EMAIL_ENABLED=false)")
 
 
 def _rl_ip(request: Request, scope: str, limit: int, window_sec: int = 60) -> None:
@@ -267,6 +285,7 @@ def email_start_add(
     Start verified email attachment flow.
     Creates a one-time code and sends it to the requested email address.
     """
+    _require_email_enabled()
     _limit_user_email_flow(request, str(user.id), "auth:email:start_add")
 
     try:
@@ -298,6 +317,7 @@ def email_confirm_add(
     db: Session = Depends(get_db),
 ):
     """Verify email code and attach verified email to the current user."""
+    _require_email_enabled()
     _limit_user_email_flow(request, str(user.id), "auth:email:confirm_add")
 
     try:
@@ -322,6 +342,7 @@ def email_start_remove(
     Start verified email removal flow.
     Sends confirmation code to the currently verified email address.
     """
+    _require_email_enabled()
     _limit_user_email_flow(request, str(user.id), "auth:email:start_remove")
 
     try:
@@ -356,6 +377,7 @@ def email_confirm_remove(
     Remove verified email from the current account.
     Confirmation can be done either by email code or by recovery code.
     """
+    _require_email_enabled()
     _limit_user_email_flow(request, str(user.id), "auth:email:confirm_remove")
 
     try:
@@ -392,9 +414,10 @@ def password_reset_start(
     except ServiceError as exc:
         _raise_service_error(exc)
 
+    email_available = is_email_enabled() and result.has_email
     return PasswordResetStartOut(
-        has_email=result.has_email,
-        email=result.email,
+        has_email=email_available,
+        email=result.email if email_available else None,
         has_recovery=result.has_recovery,
     )
 
@@ -412,6 +435,7 @@ def password_reset_email_send(
     """
     Send one-time password reset code to the verified email.
     """
+    _require_email_enabled()
     _limit_password_reset_flow(request, body.username, "auth:password_reset:email_send")
 
     try:
@@ -456,6 +480,7 @@ def password_reset_email_verify(
     Verify password reset email code.
     On success creates short-lived reset session used by the finish step.
     """
+    _require_email_enabled()
     _limit_password_reset_flow(
         request, body.username, "auth:password_reset:email_verify"
     )
