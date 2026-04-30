@@ -1,10 +1,11 @@
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from app.models.token import Token
 from app.security import tokens
 from app.db import SessionLocal
 from app.models.user import User
+from app.security.android_attestation import is_client_attestation_enabled
 from app.services.common import now_utc
 from app.security.hashing import hash_access_jti
 
@@ -21,7 +22,9 @@ def get_db():
 
 
 def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(auth_scheme), db=Depends(get_db)
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(auth_scheme),
+    db=Depends(get_db),
 ):
     """
     Resolve the current user from Authorization token
@@ -38,6 +41,28 @@ def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token"
         )
+
+    if is_client_attestation_enabled():
+        client = getattr(request.state, "client_instance", None)
+        if client is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid client binding",
+            )
+
+        if payload.get("cid") != str(client.instance_id):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid client binding",
+            )
+
+        cnf = payload.get("cnf")
+        expected_jkt = client.public_key_sha256
+        if not isinstance(cnf, dict) or cnf.get("jkt") != expected_jkt:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid client binding",
+            )
 
     token_type = payload.get("typ")
 

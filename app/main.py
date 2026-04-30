@@ -3,8 +3,8 @@ import ipaddress
 import os
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from app.routes import auth, avatar, device, app_settings
-from app.middleware.client_gate import build_client_gate_middleware
+from app.routes import auth, avatar, client_identity, device, app_settings
+from app.middleware.official_client_gate import build_official_client_gate_middleware
 
 """
 Backend API for authentication, account settings management, device settings management, and avatar storage.
@@ -55,9 +55,10 @@ Backend API for authentication, account settings management, device settings man
 if ALLOWED_HOSTS:
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
 
-app.middleware("http")(build_client_gate_middleware())
+app.middleware("http")(build_official_client_gate_middleware())
 
 app.include_router(auth.router)
+app.include_router(client_identity.router)
 app.include_router(device.router)
 app.include_router(app_settings.router)
 app.include_router(avatar.router)

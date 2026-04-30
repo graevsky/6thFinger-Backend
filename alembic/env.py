@@ -21,7 +21,16 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-from app.models import user, token, device, app_settings, email_code, password_reset_session, recovery_code
+from app.models import (
+    app_settings,
+    client_identity,
+    device,
+    email_code,
+    password_reset_session,
+    recovery_code,
+    token,
+    user,
+)
 
 # add your model's MetaData object here
 # for 'autogenerate' support
