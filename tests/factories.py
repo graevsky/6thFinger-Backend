@@ -4,6 +4,7 @@ import os
 import uuid
 
 from app.models.app_settings import AppSettings
+from app.models.client_identity import ClientInstance, ClientSession
 from app.models.email_code import EmailCode
 from app.models.password_reset_session import PasswordResetSession
 from app.models.recovery_code import RecoveryCode
@@ -130,3 +131,54 @@ def create_token(
     db.commit()
     db.refresh(row)
     return row, refresh_token
+
+
+def create_client_instance(
+    db,
+    *,
+    key_id: str,
+    public_key_der: bytes,
+    package_name: str = "com.example.a6thfingercontrolapp",
+    signing_cert_sha256: str = "B0:91:05:A6:08:50:D7:C9:45:B8:DD:27:BF:0F:C3:37:7F:15:07:2F:AC:AE:EF:32:7F:3A:07:EB:59:F2:F6:8C",
+    app_version: str | None = "1.0",
+    attestation_security_level: str = "TRUSTED_ENVIRONMENT",
+    verified_boot_state: str | None = "VERIFIED",
+    device_locked: bool | None = True,
+    revoked: bool = False,
+):
+    row = ClientInstance(
+        key_id=key_id,
+        public_key_der=public_key_der,
+        public_key_sha256=hashlib.sha256(public_key_der).hexdigest(),
+        package_name=package_name,
+        signing_cert_sha256=signing_cert_sha256,
+        app_version=app_version,
+        attestation_security_level=attestation_security_level,
+        verified_boot_state=verified_boot_state,
+        device_locked=device_locked,
+        revoked_at=now_utc() if revoked else None,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def create_client_session(
+    db,
+    *,
+    client_instance_id,
+    session_token: str,
+    expires_at: dt.datetime | None = None,
+    revoked: bool = False,
+):
+    row = ClientSession(
+        client_instance_id=client_instance_id,
+        session_token_hash=hashlib.sha256(session_token.encode()).digest(),
+        expires_at=expires_at or (now_utc() + dt.timedelta(minutes=15)),
+        revoked_at=now_utc() if revoked else None,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row

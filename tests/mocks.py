@@ -36,7 +36,10 @@ class FakeRedis:
             self._values.pop(key, None)
             self._expires_at.pop(key, None)
 
-    def set(self, key, value, ex=None):
+    def set(self, key, value, ex=None, nx=False):
+        self._purge_if_expired(key)
+        if nx and key in self._values:
+            return False
         self._values[key] = value
         if ex is None:
             self._expires_at.pop(key, None)

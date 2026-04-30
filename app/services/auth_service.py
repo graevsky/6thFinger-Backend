@@ -11,6 +11,7 @@ import os
 from redis.exceptions import RedisError
 
 from app.locale.i18n_email import build_email, normalize_lang
+from app.security.client_request_signature import AuthenticatedClient
 from app.models.app_settings import AppSettings
 from app.models.email_code import EmailCode
 from app.models.password_reset_session import PasswordResetSession
@@ -274,6 +275,7 @@ def finish_login(
     A: str,
     M1: str,
     salt: str,
+    client: AuthenticatedClient | None = None,
 ) -> LoginFinishData:
     """Finish SRP login and issue JWT tokens on successful proof verification."""
     username = _normalize_username(username_raw)
@@ -296,10 +298,17 @@ def finish_login(
     except Exception:
         _err(401, "WRONG_PASSWORD", "Invalid username or password")
 
-    access_token, access_jti_hash = tokens.create_access_token({"sub": str(user.id)})
-    refresh_token, refresh_hash, expire = tokens.create_refresh_token(
-        {"sub": str(user.id)}
-    )
+    token_claims = {"sub": str(user.id)}
+    if client is not None:
+        token_claims.update(
+            {
+                "cid": str(client.instance_id),
+                "cnf": {"jkt": client.public_key_sha256},
+            }
+        )
+
+    access_token, access_jti_hash = tokens.create_access_token(token_claims)
+    refresh_token, refresh_hash, expire = tokens.create_refresh_token(token_claims)
 
     # Refresh token is tracked by hash, access stored directly. Not very good, but ok...kinda
     db.add(
@@ -323,7 +332,11 @@ def finish_login(
     )
 
 
-def refresh_access_token(db: Session, refresh_token_raw: str | None) -> dict[str, str]:
+def refresh_access_token(
+    db: Session,
+    refresh_token_raw: str | None,
+    client: AuthenticatedClient | None = None,
+) -> dict[str, str]:
     """Issue a new access token from a valid non-revoked refresh token."""
     token_str = refresh_token_raw
     if not token_str:
@@ -333,14 +346,35 @@ def refresh_access_token(db: Session, refresh_token_raw: str | None) -> dict[str
     if not payload or payload.get("typ") != "refresh":
         _err(401, "INVALID_REFRESH", "Invalid refresh token")
 
+    if client is not None:
+        if payload.get("cid") != str(client.instance_id):
+            _err(
+                401,
+                "INVALID_CLIENT_BINDING",
+                "Refresh token is bound to another client",
+            )
+        cnf = payload.get("cnf")
+        if not isinstance(cnf, dict) or cnf.get("jkt") != client.public_key_sha256:
+            _err(
+                401,
+                "INVALID_CLIENT_BINDING",
+                "Refresh token is bound to another client",
+            )
+
     token_hash = hashlib.sha256(token_str.encode()).digest()
     db_token = db.query(Token).filter_by(token_hash=token_hash, revoked_at=None).first()
     if not db_token:
         _err(401, "TOKEN_REVOKED", "Token revoked or missing")
 
-    new_access, new_access_jti_hash = tokens.create_access_token(
-        {"sub": payload["sub"]}
-    )
+    next_claims = {"sub": payload["sub"]}
+    if client is not None:
+        next_claims.update(
+            {
+                "cid": str(client.instance_id),
+                "cnf": {"jkt": client.public_key_sha256},
+            }
+        )
+    new_access, new_access_jti_hash = tokens.create_access_token(next_claims)
     db_token.access_jti_hash = new_access_jti_hash
     db_token.last_used_at = now_utc()
     db.commit()

@@ -10,8 +10,11 @@ from app import redis_client
 from app.db import Base
 from app.deps import get_current_user, get_db as deps_get_db
 from app.main import app
+from app.middleware import official_client_gate
+from app.security import client_request_signature
 from app.security import rate_limit
 from app.services import auth_service
+from app.services import client_identity_service
 from tests.factories import create_user
 from tests.mocks import FakeEmailSender, FakeRedis
 
@@ -45,6 +48,8 @@ def fake_redis(monkeypatch):
     original_get_redis.cache_clear()
     monkeypatch.setattr(redis_client, "get_redis", lambda: fake_redis)
     monkeypatch.setattr(auth_service, "get_redis", lambda: fake_redis)
+    monkeypatch.setattr(client_identity_service, "get_redis", lambda: fake_redis)
+    monkeypatch.setattr(client_request_signature, "get_redis", lambda: fake_redis)
     monkeypatch.setattr(rate_limit, "get_redis", lambda: fake_redis)
     monkeypatch.setattr(rate_limit, "RATE_LIMIT_ENABLED", False)
     yield fake_redis
@@ -89,13 +94,28 @@ def db_session():
 
 @pytest.fixture()
 def client(db_session):
+    class _SessionProxy:
+        def __init__(self, session):
+            self._session = session
+
+        def __getattr__(self, item):
+            return getattr(self._session, item)
+
+        def close(self):
+            return None
+
     def override_get_db():
         yield db_session
 
+    original_session_local = official_client_gate.SessionLocal
     app.dependency_overrides[deps_get_db] = override_get_db
+    official_client_gate.SessionLocal = lambda: _SessionProxy(db_session)
 
-    with TestClient(app, base_url="http://localhost") as test_client:
-        yield test_client
+    try:
+        with TestClient(app, base_url="http://localhost") as test_client:
+            yield test_client
+    finally:
+        official_client_gate.SessionLocal = original_session_local
 
 
 @pytest.fixture()

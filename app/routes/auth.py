@@ -30,6 +30,7 @@ from app.schemas.auth import (
     RegisterParamsOut,
 )
 from app.security.rate_limit import enforce_rate_limit
+from app.security.android_attestation import is_client_attestation_enabled
 from app.services import auth_service
 from app.services.common import ServiceError
 
@@ -69,6 +70,15 @@ def _err(status: int, code: str, detail: str | None = None):
 def _raise_service_error(exc: ServiceError):
     """Convert service-layer error into FastAPI HTTPException"""
     raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+
+
+def _require_attested_client(request: Request):
+    if not is_client_attestation_enabled():
+        return None
+    client = getattr(request.state, "client_instance", None)
+    if client is None:
+        _err(401, "INVALID_CLIENT_BINDING", "Missing verified client request context")
+    return client
 
 
 def _get_ready_email_sender() -> SmtpEmailSender:
@@ -212,6 +222,7 @@ def login_finish(body: LoginFinishIn, request: Request, db: Session = Depends(ge
     On success returns access and refresh tokens.
     """
     _limit_login_finish(request, body.username)
+    client = _require_attested_client(request)
 
     try:
         result = auth_service.finish_login(
@@ -220,6 +231,7 @@ def login_finish(body: LoginFinishIn, request: Request, db: Session = Depends(ge
             A=body.A,
             M1=body.M1,
             salt=body.salt,
+            client=client,
         )
     except ServiceError as exc:
         _raise_service_error(exc)
@@ -238,11 +250,13 @@ def login_finish(body: LoginFinishIn, request: Request, db: Session = Depends(ge
 def refresh_token(old_refresh: dict, request: Request, db: Session = Depends(get_db)):
     """Issue a new access token using a valid refresh token."""
     _limit_refresh(request)
+    client = _require_attested_client(request)
 
     try:
         return auth_service.refresh_access_token(
             db,
             old_refresh.get("refresh_token"),
+            client=client,
         )
     except ServiceError as exc:
         _raise_service_error(exc)
