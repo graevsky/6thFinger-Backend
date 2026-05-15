@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.deps import get_current_user, get_db
+from app.schemas.auth import GenericOk
 from app.schemas.device import (
     DeviceCreate,
     DeviceOut,
@@ -70,6 +71,28 @@ def update_device(
             device_id=device_id,
             alias=data.alias,
         )
+    except ServiceError as exc:
+        _raise_service_error(exc)
+
+
+@router.delete(
+    "/{device_id}",
+    response_model=GenericOk,
+    summary="Delete device",
+)
+def delete_device(
+    device_id: UUID,
+    user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Delete an owned device and all of its saved settings."""
+    try:
+        device_service.delete_device(
+            db=db,
+            user_id=user.id,
+            device_id=device_id,
+        )
+        return GenericOk(detail="device_deleted")
     except ServiceError as exc:
         _raise_service_error(exc)
 

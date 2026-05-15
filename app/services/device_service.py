@@ -45,6 +45,17 @@ def update_device_alias(
     return device
 
 
+def delete_device(db: Session, user_id, device_id: UUID) -> None:
+    """Delete a device and all of its saved settings snapshots."""
+    device = db.query(Device).filter_by(id=device_id, owner_id=user_id).first()
+    if not device:
+        raise ServiceError(status_code=404, detail="Device not found")
+
+    db.query(DeviceSettings).filter_by(device_id=device.id).delete()
+    db.delete(device)
+    db.commit()
+
+
 def get_device_settings(db: Session, user_id, device_id: UUID) -> DeviceSettings:
     """Return the latest settings snapshot for the device."""
     device = db.query(Device).filter_by(id=device_id, owner_id=user_id).first()
@@ -84,7 +95,15 @@ def update_device_settings(
     )
 
     if settings:
-        settings.version = _coerce_settings_version(settings.version) + 1
+        current_version = max(1, _coerce_settings_version(settings.version))
+        if settings.payload == payload:
+            if settings.version != current_version:
+                settings.version = current_version
+                db.commit()
+                db.refresh(settings)
+            return settings
+
+        settings.version = current_version + 1
         settings.payload = payload
         settings.updated_at = now
     else:

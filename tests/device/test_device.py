@@ -144,6 +144,52 @@ def test_update_device_updates_alias_for_owned_device(
     assert device.alias == "new device"
 
 
+def test_delete_device_removes_owned_device_and_settings(
+    client,
+    db_session,
+    user_factory,
+    auth_as,
+):
+    user = user_factory(username="device_user_5")
+    auth_as(user)
+
+    device = create_device_row(
+        db_session,
+        owner_id=user.id,
+        address="1122334455",
+        alias="delete me",
+    )
+    create_device_settings_row(
+        db_session,
+        device_id=device.id,
+        version=2,
+        payload={"settings": "gpio-delete"},
+    )
+
+    response = client.delete(f"/device/{device.id}")
+
+    assert response.status_code == 200
+    assert response.json() == {"detail": "device_deleted"}
+    assert db_session.query(Device).filter_by(id=device.id).first() is None
+    assert db_session.query(DeviceSettings).filter_by(device_id=device.id).count() == 0
+
+
+def test_delete_device_returns_404_when_device_not_found(
+    client,
+    user_factory,
+    auth_as,
+):
+    user = user_factory(username="device_user_6")
+    auth_as(user)
+
+    missing_id = "33333333-3333-3333-3333-333333333333"
+
+    response = client.delete(f"/device/{missing_id}")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Device not found"}
+
+
 def test_get_device_settings_returns_404_when_device_not_found(
     client,
     user_factory,
@@ -362,13 +408,54 @@ def test_update_device_settings_uses_latest_row_when_multiple_exist(
     assert latest.payload == {"settings": "gpio3"}
 
 
-def test_update_device_settings_accepts_legacy_string_version(
+def test_update_device_settings_keeps_version_when_payload_is_unchanged(
     client,
     db_session,
     user_factory,
     auth_as,
 ):
     user = user_factory(username="device_user_14")
+    auth_as(user)
+
+    device = create_device_row(
+        db_session,
+        owner_id=user.id,
+    )
+
+    existing = create_device_settings_row(
+        db_session,
+        device_id=device.id,
+        version=4,
+        payload={"settings": "gpio2"},
+        updated_at=dt.datetime(2024, 1, 1, 12, 0, 0),
+    )
+
+    response = client.post(
+        f"/device/{device.id}/settings",
+        json={"payload": {"settings": "gpio2"}},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["id"] == str(existing.id)
+    assert data["device_id"] == str(device.id)
+    assert data["version"] == 4
+    assert data["payload"] == {"settings": "gpio2"}
+
+    db_session.refresh(existing)
+    assert existing.version == 4
+    assert existing.payload == {"settings": "gpio2"}
+    assert existing.updated_at == dt.datetime(2024, 1, 1, 12, 0, 0)
+
+
+def test_update_device_settings_accepts_legacy_string_version(
+    client,
+    db_session,
+    user_factory,
+    auth_as,
+):
+    user = user_factory(username="device_user_15")
     auth_as(user)
 
     device = create_device_row(
