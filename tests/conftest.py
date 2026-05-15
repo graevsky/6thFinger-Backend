@@ -67,7 +67,10 @@ def clear_runtime_state(fake_redis):
 @pytest.fixture(autouse=True)
 def email_link_env(monkeypatch):
     monkeypatch.setenv("EMAIL_LANDING_URL", "https://prothesis.ru")
-    monkeypatch.setenv("EMAIL_GUIDE_URL", "https://google.com")
+    monkeypatch.setenv(
+        "EMAIL_GUIDE_URL",
+        "https://drive.google.com/file/d/1A2usxykovqEe099k2ItJ9acGboUhyZ13/view?usp=sharing",
+    )
 
 
 @pytest.fixture()

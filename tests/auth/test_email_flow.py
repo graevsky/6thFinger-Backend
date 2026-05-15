@@ -66,9 +66,15 @@ def test_email_start_add_success_creates_new_code_consumes_old_and_uses_fake_sen
     assert "Срок действия: 10 минут." in sent["text"]
     assert "С уважением,\nкоманда Prothesis.ru" in sent["text"]
     assert "Prothesis.ru: https://prothesis.ru" in sent["text"]
-    assert "Руководство: https://google.com" in sent["text"]
+    assert (
+        "Руководство: https://drive.google.com/file/d/1A2usxykovqEe099k2ItJ9acGboUhyZ13/view?usp=sharing"
+        in sent["text"]
+    )
     assert 'href="https://prothesis.ru"' in sent["html"]
-    assert 'href="https://google.com"' in sent["html"]
+    assert (
+        'href="https://drive.google.com/file/d/1A2usxykovqEe099k2ItJ9acGboUhyZ13/view?usp=sharing"'
+        in sent["html"]
+    )
     assert "Добрый день, john_doe!" in sent["html"]
 
 
@@ -494,9 +500,15 @@ def test_email_start_remove_success_creates_code_and_sends_message(
     assert "Expires in: 10 minutes." in sent["text"]
     assert "Best regards,\nThe Prothesis.ru team" in sent["text"]
     assert "Prothesis.ru: https://prothesis.ru" in sent["text"]
-    assert "Open the guide: https://google.com" in sent["text"]
+    assert (
+        "Open the guide: https://drive.google.com/file/d/1A2usxykovqEe099k2ItJ9acGboUhyZ13/view?usp=sharing"
+        in sent["text"]
+    )
     assert 'href="https://prothesis.ru"' in sent["html"]
-    assert 'href="https://google.com"' in sent["html"]
+    assert (
+        'href="https://drive.google.com/file/d/1A2usxykovqEe099k2ItJ9acGboUhyZ13/view?usp=sharing"'
+        in sent["html"]
+    )
     assert "Good day, john_doe!" in sent["html"]
 
 
