@@ -360,3 +360,38 @@ def test_update_device_settings_uses_latest_row_when_multiple_exist(
 
     assert latest.version == 6
     assert latest.payload == {"settings": "gpio3"}
+
+
+def test_update_device_settings_accepts_legacy_string_version(
+    client,
+    db_session,
+    user_factory,
+    auth_as,
+):
+    user = user_factory(username="device_user_14")
+    auth_as(user)
+
+    device = create_device_row(
+        db_session,
+        owner_id=user.id,
+    )
+
+    create_device_settings_row(
+        db_session,
+        device_id=device.id,
+        version="7",
+        payload={"settings": "gpio7"},
+        updated_at=dt.datetime(2024, 1, 1, 12, 0, 0),
+    )
+
+    response = client.post(
+        f"/device/{device.id}/settings",
+        json={"payload": {"settings": "gpio8"}},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["device_id"] == str(device.id)
+    assert data["version"] == 8
+    assert data["payload"] == {"settings": "gpio8"}
