@@ -6,6 +6,17 @@ from app.models.device import Device, DeviceSettings
 from app.services.common import ServiceError, now_utc
 
 
+def _coerce_settings_version(value) -> int:
+    """Convert legacy stored versions to an integer counter."""
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        digits = "".join(ch for ch in value if ch.isdigit())
+        if digits:
+            return int(digits)
+    return 0
+
+
 def list_devices(db: Session, user_id) -> list[Device]:
     """Return all devices owned by the current user."""
     return db.query(Device).filter_by(owner_id=user_id).all()
@@ -73,7 +84,7 @@ def update_device_settings(
     )
 
     if settings:
-        settings.version = (settings.version or 0) + 1
+        settings.version = _coerce_settings_version(settings.version) + 1
         settings.payload = payload
         settings.updated_at = now
     else:
