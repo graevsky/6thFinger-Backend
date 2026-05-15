@@ -292,9 +292,15 @@ def test_password_reset_email_send_success_creates_code_and_uses_fake_sender(
     assert "Срок действия: 10 минут." in sent["text"]
     assert "С уважением,\nкоманда Prothesis.ru" in sent["text"]
     assert "Prothesis.ru: https://prothesis.ru" in sent["text"]
-    assert "Руководство: https://google.com" in sent["text"]
+    assert (
+        "Руководство: https://drive.google.com/file/d/1A2usxykovqEe099k2ItJ9acGboUhyZ13/view?usp=sharing"
+        in sent["text"]
+    )
     assert 'href="https://prothesis.ru"' in sent["html"]
-    assert 'href="https://google.com"' in sent["html"]
+    assert (
+        'href="https://drive.google.com/file/d/1A2usxykovqEe099k2ItJ9acGboUhyZ13/view?usp=sharing"'
+        in sent["html"]
+    )
     assert "Добрый день, john_doe!" in sent["html"]
 
 
